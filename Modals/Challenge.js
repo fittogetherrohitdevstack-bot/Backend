@@ -1,0 +1,57 @@
+const mongoose = require("mongoose");
+
+const challengeSchema = new mongoose.Schema(
+  {
+    groupId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Group",
+      required: true,
+    },
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    description: {
+      type: String,
+      default: "",
+    },
+    challengeType: {
+      type: String,
+      enum: ["meal_completion", "workout_days", "water_goal", "streak"],
+      required: true,
+    },
+    target: {
+      type: Number,
+      required: true,
+      default: 7,
+    },
+    startDate: {
+      type: String, // YYYY-MM-DD
+      required: true,
+    },
+    endDate: {
+      type: String, // YYYY-MM-DD
+      required: true,
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    status: {
+      type: String,
+      enum: ["upcoming", "active", "completed"],
+      default: "active",
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+challengeSchema.index({ groupId: 1, status: 1 });
+
+const Challenge = mongoose.model("Challenge", challengeSchema);
+
+module.exports = Challenge;
