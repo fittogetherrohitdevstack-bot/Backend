@@ -7,6 +7,7 @@ const User = require("../Modals/User");
 const asyncHandler = require("../Utils/asyncHandler");
 const { sendSuccess, sendError } = require("../Utils/apiResponse");
 const { emitGroupActivity } = require("../Utils/socket");
+const { calculateChartTotals } = require("./mealController");
 
 // @desc Create group challenge
 // @route POST /api/groups/:id/challenges
@@ -140,12 +141,16 @@ const getChallengeDetails = asyncHandler(async (req, res) => {
       const logs = await MealLog.find({
         userId: uId,
         date: { $gte: challenge.startDate, $lte: challenge.endDate },
-      });
-      // count days with >= 80% meals eaten
+      }).lean();
+      // Count days with >= 80% meal completion (consistent with dashboard/tracker totals)
       logs.forEach((log) => {
-        if (log.meals.length > 0) {
-          const eaten = log.meals.filter((m) => m.status === "eaten").length;
-          if (eaten / log.meals.length >= 0.8) actualProgress += 1;
+        if (log.meals && log.meals.length > 0) {
+          const totals = calculateChartTotals(log.meals);
+          const pct =
+            totals.totalItems > 0
+              ? totals.completionPercentage
+              : Math.round((totals.mealsCompleted / totals.totalMeals) * 100);
+          if (pct >= 80) actualProgress += 1;
         }
       });
     } else if (challenge.challengeType === "workout_days") {

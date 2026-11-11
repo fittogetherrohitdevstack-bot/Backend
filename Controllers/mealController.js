@@ -5,8 +5,6 @@ const DietTemplate = require("../Modals/DietTemplate");
 const WaterLog = require("../Modals/WaterLog");
 const WorkoutSession = require("../Modals/WorkoutSession");
 const FitnessProfile = require("../Modals/FitnessProfile");
-const PointsLedger = require("../Modals/PointsLedger");
-const Membership = require("../Modals/Membership");
 const asyncHandler = require("../Utils/asyncHandler");
 const { sendSuccess, sendError } = require("../Utils/apiResponse");
 const {
@@ -17,8 +15,51 @@ const {
   getCalendarMonth,
 } = require("../Utils/date");
 const { sumFoodItems } = require("../Utils/nutrition");
-const { calculateMealPoints } = require("../Utils/gamification");
-const { emitGroupActivity } = require("../Utils/socket");
+const {
+  calculateMealPoints,
+  syncDailyHabitPoints,
+} = require("../Utils/gamification");
+
+/**
+ * Keeps squad meal points (`PointsLedger`) and real-time socket feed synced
+ * whenever meals or food items are logged, ticked, or updated.
+ */
+const syncMealGamificationAndNotify = async ({
+  userId,
+  userName,
+  dateStr,
+  timezone,
+  mealLog,
+  mealName = "Today's meals",
+  status = "updated",
+  notifyFeed = true,
+}) => {
+  if (!mealLog) return;
+  const meals = mealLog.meals || [];
+  const totalMeals = meals.length;
+  const eatenMeals = meals.filter((m) => m.status === "eaten").length;
+  const mealPoints = calculateMealPoints(eatenMeals, totalMeals);
+
+  const isTodayDate = dateStr === getLocalDateString(new Date(), timezone);
+  const eventName = isTodayDate ? (notifyFeed ? "meal-logged" : "squad-sync") : null;
+
+  await syncDailyHabitPoints({
+    userId,
+    date: dateStr,
+    type: "meals",
+    points: mealPoints,
+    meta: { eatenMeals, totalMeals },
+    eventName,
+    eventPayload: isTodayDate
+      ? {
+          userId,
+          userName,
+          mealName,
+          status,
+        }
+      : null,
+  });
+};
 
 /**
  * Helper to calculate planned vs consumed totals and derived statuses
@@ -125,7 +166,7 @@ const calculateChartTotals = (meals = []) => {
 const getDayChart = asyncHandler(async (req, res) => {
   const userId = req.user._id;
   const timezone = req.user.timezone || "Asia/Kolkata";
-  const dateStr = req.query.date || getLocalDateString(new Date(), timezone);
+  const dateStr = req.query.date || req.body?.date || getLocalDateString(new Date(), timezone);
 
   // 1. Check if user already has a MealLog for this date
   let mealLog = await MealLog.findOne({ userId, date: dateStr });
@@ -300,6 +341,15 @@ const saveDayChart = asyncHandler(async (req, res) => {
     { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
   );
 
+  await syncMealGamificationAndNotify({
+    userId,
+    userName: req.user.name,
+    dateStr,
+    timezone,
+    mealLog,
+    notifyFeed: false,
+  });
+
   return sendSuccess(res, {
     mealLog,
     ...totals,
@@ -350,29 +400,16 @@ const updateChartItem = asyncHandler(async (req, res) => {
   const totals = calculateChartTotals(mealLog.meals);
   await mealLog.save();
 
-  // Gamification & live event
-  if (mealLog.groupId) {
-    const eatenMeals = mealLog.meals.filter((m) => m.status === "eaten").length;
-    const mealPoints = calculateMealPoints(eatenMeals, mealLog.meals.length);
-
-    if (mealPoints > 0) {
-      await PointsLedger.findOneAndUpdate(
-        {
-          userId,
-          groupId: mealLog.groupId,
-          date: dateStr,
-          type: "meals",
-        },
-        {
-          $set: {
-            points: mealPoints,
-            meta: { eatenMeals, totalMeals: mealLog.meals.length },
-          },
-        },
-        { upsert: true, returnDocument: "after" }
-      );
-    }
-  }
+  await syncMealGamificationAndNotify({
+    userId,
+    userName: req.user.name,
+    dateStr,
+    timezone,
+    mealLog,
+    mealName: `${item.name} (${meal.mealName})`,
+    status: willBeEaten ? "eaten" : "pending",
+    notifyFeed: willBeEaten,
+  });
 
   return sendSuccess(res, {
     mealLog,
@@ -435,6 +472,17 @@ const updateChartMeal = asyncHandler(async (req, res) => {
   const totals = calculateChartTotals(mealLog.meals);
   await mealLog.save();
 
+  await syncMealGamificationAndNotify({
+    userId,
+    userName: req.user.name,
+    dateStr,
+    timezone,
+    mealLog,
+    mealName: meal.mealName,
+    status,
+    notifyFeed: status === "eaten",
+  });
+
   return sendSuccess(res, {
     mealLog,
     ...totals,
@@ -484,6 +532,17 @@ const addUnplannedItem = asyncHandler(async (req, res) => {
   meal.plannedFoodItems.push(newItem);
   const totals = calculateChartTotals(mealLog.meals);
   await mealLog.save();
+
+  await syncMealGamificationAndNotify({
+    userId,
+    userName: req.user.name,
+    dateStr,
+    timezone,
+    mealLog,
+    mealName: `${newItem.name} (${meal.mealName})`,
+    status: newItem.eaten ? "eaten" : "pending",
+    notifyFeed: newItem.eaten,
+  });
 
   return sendSuccess(res, {
     mealLog,
@@ -847,8 +906,10 @@ const getMyDashboardSummary = asyncHandler(async (req, res) => {
     date: todayStr,
   });
   const waterConsumedMl = (waterLog?.entries || []).reduce((sum, e) => sum + e.amountMl, 0);
-  const waterTargetMl = waterLog?.targetMl || targets.waterMl || 3000;
-  const waterPercent = Math.min(100, Math.round((waterConsumedMl / waterTargetMl) * 100));
+  const waterTargetMl = targets.waterMl || waterLog?.targetMl || 3000;
+  const waterPercent = waterTargetMl > 0
+    ? Math.min(100, Math.round((waterConsumedMl / waterTargetMl) * 100))
+    : 0;
 
   const workoutSession = await WorkoutSession.findOne({
     userId: req.user._id,

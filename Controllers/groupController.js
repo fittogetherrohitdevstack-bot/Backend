@@ -11,6 +11,7 @@ const asyncHandler = require("../Utils/asyncHandler");
 const { sendSuccess, sendError } = require("../Utils/apiResponse");
 const { getLocalDateString } = require("../Utils/date");
 const { emitGroupActivity } = require("../Utils/socket");
+const { calculateChartTotals } = require("./mealController");
 
 // @desc Create a new fitness group
 // @route POST /api/groups
@@ -263,71 +264,110 @@ const removeMember = asyncHandler(async (req, res) => {
 // @route GET /api/groups/:id/dashboard
 const getGroupDashboard = asyncHandler(async (req, res) => {
   const groupId = req.group._id;
-  const todayStr = getLocalDateString(new Date(), req.user.timezone);
+  const fallbackTimezone = req.user.timezone || "Asia/Kolkata";
+  const todayStr = getLocalDateString(new Date(), fallbackTimezone);
 
   // 1. Fetch active members
   const memberships = await Membership.find({
     groupId,
     status: "active",
-  }).populate("userId", "name email profileImage");
+  }).populate("userId", "name email profileImage timezone");
 
   const memberIds = memberships.map((m) => m.userId?._id).filter(Boolean);
 
-  // 2. Fetch today's meal logs for all members in one query
-  const todayMealLogs = await MealLog.find({
-    groupId,
-    userId: { $in: memberIds },
-    date: todayStr,
+  // Resolve each member's local today date so account and squad stay in lockstep
+  const memberDateMap = new Map();
+  const uniqueDatesSet = new Set([todayStr]);
+  memberships.forEach((m) => {
+    const userObj = m.userId;
+    if (!userObj?._id) return;
+    const localDate = getLocalDateString(new Date(), userObj.timezone || fallbackTimezone);
+    memberDateMap.set(userObj._id.toString(), localDate);
+    uniqueDatesSet.add(localDate);
   });
-  const mealLogMap = new Map(todayMealLogs.map((log) => [log.userId.toString(), log]));
+  const uniqueDates = Array.from(uniqueDatesSet);
 
-  // 3. Fetch today's workout sessions for all members
-  const todayWorkouts = await WorkoutSession.find({
-    userId: { $in: memberIds },
-    date: todayStr,
-  });
-  const workoutMap = new Map(todayWorkouts.map((w) => [w.userId.toString(), w]));
+  // Fetch member water targets + today's meal logs, workouts, and water logs in parallel
+  const [profiles, todayMealLogs, todayWorkouts, todayWater] = await Promise.all([
+    FitnessProfile.find({ userId: { $in: memberIds } })
+      .select("userId targets.waterMl")
+      .lean(),
+    // MealLog is unique per { userId, date } regardless of groupId (DietTemplates/Tracker logs omit groupId)
+    MealLog.find({
+      userId: { $in: memberIds },
+      date: { $in: uniqueDates },
+    }).lean(),
+    WorkoutSession.find({
+      userId: { $in: memberIds },
+      date: { $in: uniqueDates },
+    }).lean(),
+    WaterLog.find({
+      userId: { $in: memberIds },
+      date: { $in: uniqueDates },
+    }).lean(),
+  ]);
 
-  // 4. Fetch today's water logs
-  const todayWater = await WaterLog.find({
-    userId: { $in: memberIds },
-    date: todayStr,
-  });
-  const waterMap = new Map(todayWater.map((w) => [w.userId.toString(), w]));
+  const waterTargetMap = new Map(
+    profiles.map((p) => [p.userId.toString(), p.targets?.waterMl])
+  );
+  const mealLogMap = new Map(
+    todayMealLogs.map((log) => [`${log.userId.toString()}_${log.date}`, log])
+  );
+  const workoutMap = new Map(
+    todayWorkouts.map((w) => [`${w.userId.toString()}_${w.date}`, w])
+  );
+  const waterMap = new Map(
+    todayWater.map((w) => [`${w.userId.toString()}_${w.date}`, w])
+  );
 
-  // 5. Aggregate member progress cards
+  // Aggregate member progress cards
+  let totalPlannedItems = 0;
+  let totalCompletedItems = 0;
+
   const memberSummaries = memberships.map((m) => {
     const user = m.userId ? m.userId.toObject() : {};
     const uId = user._id?.toString();
+    const localDate = memberDateMap.get(uId) || todayStr;
+    const key = `${uId}_${localDate}`;
 
-    // Meals calculation
-    const mealLog = mealLogMap.get(uId);
+    // Meals calculation using the exact same item-level totals as Account Dashboard & Daily Tracker
+    const mealLog = mealLogMap.get(key);
     let totalMeals = 0;
     let eatenMeals = 0;
+    let totalItems = 0;
+    let itemsCompleted = 0;
     let mealCompletionRate = 0;
 
     if (mealLog && mealLog.meals && mealLog.meals.length > 0) {
-      totalMeals = mealLog.meals.length;
-      eatenMeals = mealLog.meals.filter((meal) => meal.status === "eaten").length;
-      mealCompletionRate = Math.round((eatenMeals / totalMeals) * 100);
+      const totals = calculateChartTotals(mealLog.meals);
+      totalMeals = totals.totalMeals;
+      eatenMeals = totals.mealsCompleted;
+      totalItems = totals.totalItems;
+      itemsCompleted = totals.itemsCompleted;
+      mealCompletionRate =
+        totalItems > 0
+          ? totals.completionPercentage
+          : Math.round((eatenMeals / totalMeals) * 100);
+
+      totalPlannedItems += totalItems;
+      totalCompletedItems += itemsCompleted;
     }
 
     // Workout calculation
-    const workout = workoutMap.get(uId);
+    const workout = workoutMap.get(key);
     const workoutStatus = workout ? workout.status : "pending";
     const workoutCompleted = workoutStatus === "completed" || workoutStatus === "rest";
 
-    // Water calculation
-    const water = waterMap.get(uId);
-    let totalWaterMl = 0;
-    let waterTarget = 3000;
-    let waterProgressPercent = 0;
-
-    if (water) {
-      waterTarget = water.targetMl || 3000;
-      totalWaterMl = (water.entries || []).reduce((sum, e) => sum + e.amountMl, 0);
-      waterProgressPercent = Math.min(100, Math.round((totalWaterMl / waterTarget) * 100));
-    }
+    // Water calculation synchronized with FitnessProfile target + WaterLog entries
+    const water = waterMap.get(key);
+    const waterTarget = waterTargetMap.get(uId) || water?.targetMl || 3000;
+    const totalWaterMl = water
+      ? (water.entries || []).reduce((sum, e) => sum + (e.amountMl || 0), 0)
+      : 0;
+    const waterProgressPercent =
+      waterTarget > 0
+        ? Math.min(100, Math.round((totalWaterMl / waterTarget) * 100))
+        : 0;
 
     return {
       userId: user._id,
@@ -337,6 +377,8 @@ const getGroupDashboard = asyncHandler(async (req, res) => {
       today: {
         totalMeals,
         eatenMeals,
+        totalItems,
+        itemsCompleted,
         mealCompletionRate,
         workoutStatus,
         workoutCompleted,
@@ -350,7 +392,12 @@ const getGroupDashboard = asyncHandler(async (req, res) => {
   // Calculate overall group consistency
   const totalPlannedMeals = memberSummaries.reduce((sum, m) => sum + m.today.totalMeals, 0);
   const totalEatenMeals = memberSummaries.reduce((sum, m) => sum + m.today.eatenMeals, 0);
-  const groupConsistency = totalPlannedMeals > 0 ? Math.round((totalEatenMeals / totalPlannedMeals) * 100) : 0;
+  const groupConsistency =
+    totalPlannedItems > 0
+      ? Math.round((totalCompletedItems / totalPlannedItems) * 100)
+      : totalPlannedMeals > 0
+      ? Math.round((totalEatenMeals / totalPlannedMeals) * 100)
+      : 0;
 
   return sendSuccess(res, {
     group: req.group,

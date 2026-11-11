@@ -1,3 +1,7 @@
+const PointsLedger = require("../Modals/PointsLedger");
+const Membership = require("../Modals/Membership");
+const { emitGroupActivity } = require("./socket");
+
 /**
  * Gamification logic: Points, Streaks, and Badges
  */
@@ -74,8 +78,60 @@ const SEEDED_BADGES = [
   },
 ];
 
+/**
+ * Upserts or clears a daily PointsLedger entry (`meals`, `water`, `workout`) across
+ * the user's active squad memberships and broadcasts socket updates to every squad.
+ */
+const syncDailyHabitPoints = async ({
+  userId,
+  date,
+  type,
+  points,
+  meta = {},
+  eventName = null,
+  eventPayload = null,
+}) => {
+  const memberships = await Membership.find({
+    userId,
+    status: "active",
+  })
+    .select("groupId")
+    .lean();
+
+  if (!memberships.length) {
+    return { memberships: [], updated: false };
+  }
+
+  const primaryGroupId = memberships[0].groupId;
+
+  if (points > 0) {
+    await PointsLedger.findOneAndUpdate(
+      { userId, date, type },
+      {
+        $set: {
+          groupId: primaryGroupId,
+          points,
+          meta,
+        },
+      },
+      { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
+    );
+  } else {
+    await PointsLedger.deleteOne({ userId, date, type });
+  }
+
+  if (eventName) {
+    memberships.forEach((m) => {
+      emitGroupActivity(m.groupId.toString(), eventName, eventPayload || {});
+    });
+  }
+
+  return { memberships, updated: true };
+};
+
 module.exports = {
   calculateMealPoints,
   POINTS_RULES,
   SEEDED_BADGES,
+  syncDailyHabitPoints,
 };

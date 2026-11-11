@@ -46,11 +46,12 @@ const getGroupLeaderboard = asyncHandler(async (req, res) => {
     }
   });
 
-  // Aggregate points from ledger
+  // Aggregate daily consistency points for active members across all their squads
+  const memberIds = memberships.map((m) => m.userId?._id).filter(Boolean);
   const ledgerEntries = await PointsLedger.find({
-    groupId,
+    userId: { $in: memberIds },
     ...dateFilter,
-  });
+  }).lean();
 
   const memberDays = new Map();
 

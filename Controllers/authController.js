@@ -2,8 +2,11 @@ const jwt = require("jsonwebtoken");
 const config = require("../Config/env");
 const User = require("../Modals/User");
 const FitnessProfile = require("../Modals/FitnessProfile");
+const WaterLog = require("../Modals/WaterLog");
 const asyncHandler = require("../Utils/asyncHandler");
 const { sendSuccess, sendError } = require("../Utils/apiResponse");
+const { getLocalDateString } = require("../Utils/date");
+const { POINTS_RULES, syncDailyHabitPoints } = require("../Utils/gamification");
 const { calculateTDEE } = require("../Utils/nutrition");
 const {
   validateImageFile,
@@ -261,6 +264,35 @@ const updateProfile = asyncHandler(async (req, res) => {
 
   await profile.save();
   const updatedUser = await User.findById(req.user._id);
+
+  // Sync today's WaterLog target & water points if user updated their hydration target
+  if (targets && targets.waterMl !== undefined && profile.targets?.waterMl) {
+    const todayStr = getLocalDateString(
+      new Date(),
+      updatedUser?.timezone || req.user.timezone || "Asia/Kolkata"
+    );
+    const todayWaterLog = await WaterLog.findOne({
+      userId: req.user._id,
+      date: todayStr,
+    });
+    if (todayWaterLog) {
+      todayWaterLog.targetMl = profile.targets.waterMl;
+      await todayWaterLog.save();
+
+      const totalConsumed = (todayWaterLog.entries || []).reduce(
+        (sum, entry) => sum + (entry.amountMl || 0),
+        0
+      );
+      await syncDailyHabitPoints({
+        userId: req.user._id,
+        date: todayStr,
+        type: "water",
+        points: totalConsumed >= todayWaterLog.targetMl ? POINTS_RULES.WATER_GOAL_REACHED : 0,
+        meta: { totalConsumed, targetMl: todayWaterLog.targetMl },
+        eventName: "squad-sync",
+      });
+    }
+  }
 
   return sendSuccess(res, { user: updatedUser, profile }, "Profile updated successfully");
 });

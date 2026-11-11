@@ -1,13 +1,45 @@
 const WorkoutPlan = require("../Modals/WorkoutPlan");
 const WorkoutSession = require("../Modals/WorkoutSession");
 const PersonalRecord = require("../Modals/PersonalRecord");
-const PointsLedger = require("../Modals/PointsLedger");
-const Membership = require("../Modals/Membership");
 const asyncHandler = require("../Utils/asyncHandler");
 const { sendSuccess, sendError } = require("../Utils/apiResponse");
 const { getLocalDateString, getDayOfWeek } = require("../Utils/date");
-const { POINTS_RULES } = require("../Utils/gamification");
-const { emitGroupActivity } = require("../Utils/socket");
+const { POINTS_RULES, syncDailyHabitPoints } = require("../Utils/gamification");
+
+const syncWorkoutPointsAndNotify = async (user, sessionDate, session) => {
+  const isCompletedOrRest =
+    session.status === "completed" || session.status === "rest";
+  const pts = !isCompletedOrRest
+    ? 0
+    : session.status === "completed"
+    ? POINTS_RULES.WORKOUT_COMPLETED
+    : POINTS_RULES.REST_DAY_HONORED;
+
+  const isTodayDate =
+    sessionDate === getLocalDateString(new Date(), user.timezone || "Asia/Kolkata");
+  const eventName = isTodayDate
+    ? isCompletedOrRest
+      ? "workout-completed"
+      : "squad-sync"
+    : null;
+
+  await syncDailyHabitPoints({
+    userId: user._id,
+    date: sessionDate,
+    type: "workout",
+    points: pts,
+    meta: { status: session.status, workoutName: session.workoutName },
+    eventName,
+    eventPayload: isTodayDate
+      ? {
+          userId: user._id,
+          userName: user.name,
+          workoutName: session.workoutName,
+          status: session.status,
+        }
+      : null,
+  });
+};
 
 // @desc Create workout plan
 // @route POST /api/workouts
@@ -188,42 +220,8 @@ const saveWorkoutSession = asyncHandler(async (req, res) => {
     }
   }
 
-  // Award points if completed or honored rest day
-  if (session.status === "completed" || session.status === "rest") {
-    const membership = await Membership.findOne({
-      userId: req.user._id,
-      status: "active",
-    });
-
-    if (membership) {
-      const pts = session.status === "completed"
-        ? POINTS_RULES.WORKOUT_COMPLETED
-        : POINTS_RULES.REST_DAY_HONORED;
-
-      await PointsLedger.findOneAndUpdate(
-        {
-          userId: req.user._id,
-          groupId: membership.groupId,
-          date: sessionDate,
-          type: "workout",
-        },
-        {
-          $set: {
-            points: pts,
-            meta: { status: session.status, workoutName: session.workoutName },
-          },
-        },
-        { upsert: true, new: true }
-      );
-
-      emitGroupActivity(membership.groupId.toString(), "workout-completed", {
-        userId: req.user._id,
-        userName: req.user.name,
-        workoutName: session.workoutName,
-        status: session.status,
-      });
-    }
-  }
+  // Award points and broadcast live squad update across all active squads
+  await syncWorkoutPointsAndNotify(req.user, sessionDate, session);
 
   return sendSuccess(res, { session }, "Workout session saved successfully");
 });
@@ -285,6 +283,8 @@ const markAttendance = asyncHandler(async (req, res) => {
     },
     { upsert: true, new: true }
   );
+
+  await syncWorkoutPointsAndNotify(req.user, todayStr, session);
 
   return sendSuccess(res, { session }, `Marked as ${status}`);
 });
