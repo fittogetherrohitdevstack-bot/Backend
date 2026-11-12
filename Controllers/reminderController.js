@@ -66,6 +66,11 @@ const updateReminderSettings = asyncHandler(async (req, res) => {
     channels,
     snoozeMinutes,
     enableFeature,
+    dailyReminder,
+    squadStreakAtRisk,
+    nudges,
+    challengeUpdates,
+    weeklyRecapReady,
   } = req.body;
 
   const effectiveTz = timezone || existing.timezone || currentUser?.timezone || "Asia/Kolkata";
@@ -153,7 +158,54 @@ const updateReminderSettings = asyncHandler(async (req, res) => {
   if (channels) {
     existing.channels = {
       inApp: channels.inApp !== undefined ? Boolean(channels.inApp) : existing.channels.inApp,
-      push: false,
+      push: channels.push !== undefined ? Boolean(channels.push) : existing.channels.push,
+    };
+  }
+
+  if (dailyReminder) {
+    existing.dailyReminder = {
+      enabled:
+        dailyReminder.enabled !== undefined
+          ? Boolean(dailyReminder.enabled)
+          : existing.dailyReminder?.enabled !== false,
+      time: dailyReminder.time || existing.dailyReminder?.time || "20:00",
+    };
+  }
+
+  if (squadStreakAtRisk) {
+    existing.squadStreakAtRisk = {
+      enabled:
+        squadStreakAtRisk.enabled !== undefined
+          ? Boolean(squadStreakAtRisk.enabled)
+          : existing.squadStreakAtRisk?.enabled !== false,
+      time: squadStreakAtRisk.time || existing.squadStreakAtRisk?.time || "20:30",
+    };
+  }
+
+  if (nudges) {
+    existing.nudges = {
+      enabled:
+        nudges.enabled !== undefined
+          ? Boolean(nudges.enabled)
+          : existing.nudges?.enabled !== false,
+    };
+  }
+
+  if (challengeUpdates) {
+    existing.challengeUpdates = {
+      enabled:
+        challengeUpdates.enabled !== undefined
+          ? Boolean(challengeUpdates.enabled)
+          : existing.challengeUpdates?.enabled !== false,
+    };
+  }
+
+  if (weeklyRecapReady) {
+    existing.weeklyRecapReady = {
+      enabled:
+        weeklyRecapReady.enabled !== undefined
+          ? Boolean(weeklyRecapReady.enabled)
+          : existing.weeklyRecapReady?.enabled !== false,
     };
   }
 

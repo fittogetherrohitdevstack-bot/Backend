@@ -15,5 +15,8 @@ router.use("/jobs", require("./jobs"));
 router.use("/dashboard", require("./dashboard"));
 router.use("/challenges", require("./challenges"));
 router.use("/notifications", require("./notifications"));
+router.use("/feed", require("./feed"));
+router.use("/push", require("./push"));
+router.use("/recap", require("./recap"));
 
 module.exports = router;

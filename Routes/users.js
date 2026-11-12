@@ -42,11 +42,21 @@ const updateFeaturesSchema = {
   }),
 };
 
+const updateSocialSettingsSchema = {
+  body: z.object({
+    showWeightInFeed: z.boolean().optional(),
+    showWeightInRecap: z.boolean().optional(),
+    allowNudges: z.boolean().optional(),
+  }),
+};
+
 router.use(protect);
 
 router.get("/me", authController.getMe);
 router.put("/profile", authController.updateProfile);
 router.put("/features", validate(updateFeaturesSchema), authController.updateFeatureSettings);
+router.put("/me/social-settings", validate(updateSocialSettingsSchema), authController.updateSocialSettings);
+router.post("/me/streak-freeze", authController.activateStreakFreeze);
 router.post("/avatar", handleAvatarUpload, authController.uploadAvatar);
 router.delete("/avatar", authController.removeAvatar);
 router.get("/me/badges", badgeController.getMyBadges);

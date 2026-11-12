@@ -35,6 +35,32 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "Asia/Kolkata",
     },
+    currentStreak: {
+      type: Number,
+      default: 0,
+    },
+    longestStreak: {
+      type: Number,
+      default: 0,
+    },
+    lastLogDate: {
+      type: String,
+      default: "",
+    },
+    streakFreeze: {
+      available: { type: Boolean, default: true },
+      lastResetWeek: { type: String, default: "" },
+      usedDates: { type: [String], default: [] },
+    },
+    socialPrivacy: {
+      showWeightInFeed: { type: Boolean, default: false },
+      showWeightInRecap: { type: Boolean, default: false },
+      allowNudges: { type: Boolean, default: true },
+    },
+    needsOnboarding: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

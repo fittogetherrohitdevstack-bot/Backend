@@ -76,6 +76,24 @@ const SEEDED_BADGES = [
     description: "Logged breakfast before 9:00 AM five times",
     icon: "Sun",
   },
+  {
+    code: "WATER_WARRIOR",
+    name: "Water Warrior",
+    description: "Hit your daily hydration target on 10 different days",
+    icon: "Droplets",
+  },
+  {
+    code: "CONSISTENCY_KING",
+    name: "Consistency King",
+    description: "Maintained a 14-day logging streak without quitting",
+    icon: "Medal",
+  },
+  {
+    code: "SQUAD_STAR",
+    name: "Squad Star",
+    description: "Joined a squad challenge and showed up for your team",
+    icon: "Star",
+  },
 ];
 
 /**

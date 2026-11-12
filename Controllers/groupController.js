@@ -12,6 +12,11 @@ const { sendSuccess, sendError } = require("../Utils/apiResponse");
 const { getLocalDateString } = require("../Utils/date");
 const { emitGroupActivity } = require("../Utils/socket");
 const { calculateChartTotals } = require("./mealController");
+const {
+  recalculateGroupStreak,
+  getSquadTodayMemberStatuses,
+} = require("../Utils/streakService");
+const { ensureWeeklyChallengeForGroup } = require("../Utils/challengeService");
 
 // @desc Create a new fitness group
 // @route POST /api/groups
@@ -93,7 +98,45 @@ const joinGroup = asyncHandler(async (req, res) => {
     userName: req.user.name,
   });
 
+  await recalculateGroupStreak(group._id).catch(() => {});
+
   return sendSuccess(res, { group, membership }, "Joined group successfully", 200);
+});
+
+// @desc Public invite link preview (safe metadata only, no user logs)
+// @route GET /api/groups/invite/:code
+const getInvitePreview = asyncHandler(async (req, res) => {
+  const code = String(req.params.code || "").trim().toUpperCase();
+  if (!code) {
+    return sendError(res, "Invite code is required", 400);
+  }
+
+  const group = await Group.findOne({ inviteCode: code, isActive: true })
+    .select("name description inviteCode maxMembers currentStreak longestStreak createdAt")
+    .lean();
+
+  if (!group) {
+    return sendError(res, "Squad invite link is invalid or expired", 404);
+  }
+
+  const memberCount = await Membership.countDocuments({
+    groupId: group._id,
+    status: "active",
+  });
+
+  return sendSuccess(res, {
+    squad: {
+      _id: group._id,
+      name: group.name,
+      description: group.description,
+      inviteCode: group.inviteCode,
+      memberCount,
+      maxMembers: group.maxMembers,
+      isFull: memberCount >= group.maxMembers,
+      currentStreak: group.currentStreak || 0,
+      longestStreak: group.longestStreak || 0,
+    },
+  });
 });
 
 // @desc Get user's groups
@@ -136,12 +179,39 @@ const getGroupById = asyncHandler(async (req, res) => {
 // @desc Update group details (Admin only)
 // @route PUT /api/groups/:id
 const updateGroup = asyncHandler(async (req, res) => {
-  const { name, description, maxMembers } = req.body;
+  const { name, description, maxMembers, weeklyStakes, challengeSettings } = req.body;
   const group = req.group;
 
   if (name) group.name = name;
   if (description !== undefined) group.description = description;
   if (maxMembers) group.maxMembers = maxMembers;
+
+  if (weeklyStakes && typeof weeklyStakes === "object") {
+    group.weeklyStakes = {
+      enabled:
+        weeklyStakes.enabled !== undefined
+          ? Boolean(weeklyStakes.enabled)
+          : Boolean(group.weeklyStakes?.enabled),
+      forfeitText:
+        weeklyStakes.forfeitText !== undefined
+          ? String(weeklyStakes.forfeitText).trim().slice(0, 140)
+          : group.weeklyStakes?.forfeitText || "",
+    };
+  }
+
+  if (challengeSettings && typeof challengeSettings === "object") {
+    group.challengeSettings = {
+      autoRotate:
+        challengeSettings.autoRotate !== undefined
+          ? Boolean(challengeSettings.autoRotate)
+          : group.challengeSettings?.autoRotate !== false,
+      preferredTemplate:
+        challengeSettings.preferredTemplate !== undefined
+          ? String(challengeSettings.preferredTemplate)
+          : group.challengeSettings?.preferredTemplate || "",
+      rotationIndex: group.challengeSettings?.rotationIndex || 0,
+    };
+  }
 
   await group.save();
   return sendSuccess(res, { group }, "Group updated successfully");
@@ -399,18 +469,50 @@ const getGroupDashboard = asyncHandler(async (req, res) => {
       ? Math.round((totalEatenMeals / totalPlannedMeals) * 100)
       : 0;
 
+  const mongoose = require("mongoose");
+  const isDbReady = mongoose.connection.readyState === 1;
+  const rawGroup = typeof req.group.toObject === "function" ? req.group.toObject() : req.group;
+
+  let streakStats = null;
+  let todayStatus = null;
+  let activeWeeklyChallenge = null;
+
+  if (isDbReady) {
+    [streakStats, todayStatus, activeWeeklyChallenge] = await Promise.all([
+      recalculateGroupStreak(req.group._id).catch(() => ({
+        currentStreak: rawGroup.currentStreak || 0,
+        longestStreak: rawGroup.longestStreak || 0,
+        lastLogDate: rawGroup.lastLogDate || "",
+      })),
+      getSquadTodayMemberStatuses(req.group._id, req.user._id).catch(() => null),
+      rawGroup.challengeSettings?.autoRotate !== false
+        ? ensureWeeklyChallengeForGroup(req.group._id).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+  }
+
   return sendSuccess(res, {
-    group: req.group,
+    group: {
+      ...rawGroup,
+      currentStreak: streakStats?.currentStreak ?? rawGroup.currentStreak ?? 0,
+      longestStreak: streakStats?.longestStreak ?? rawGroup.longestStreak ?? 0,
+      lastLogDate: streakStats?.lastLogDate ?? rawGroup.lastLogDate ?? "",
+    },
     date: todayStr,
     groupConsistency,
     activeMembersCount: memberSummaries.length,
     members: memberSummaries,
+    streakStats,
+    todayStatus,
+    activeWeeklyChallenge,
+    userRole: req.membership?.role || "member",
   });
 });
 
 module.exports = {
   createGroup,
   joinGroup,
+  getInvitePreview,
   getMyGroups,
   getGroupById,
   updateGroup,

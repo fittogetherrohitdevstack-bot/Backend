@@ -1,6 +1,8 @@
 const jwt = require("jsonwebtoken");
 const config = require("../Config/env");
 const User = require("../Modals/User");
+const Group = require("../Modals/Group");
+const Membership = require("../Modals/Membership");
 const FitnessProfile = require("../Modals/FitnessProfile");
 const WaterLog = require("../Modals/WaterLog");
 const asyncHandler = require("../Utils/asyncHandler");
@@ -8,6 +10,8 @@ const { sendSuccess, sendError } = require("../Utils/apiResponse");
 const { getLocalDateString } = require("../Utils/date");
 const { POINTS_RULES, syncDailyHabitPoints } = require("../Utils/gamification");
 const { calculateTDEE } = require("../Utils/nutrition");
+const { emitGroupActivity } = require("../Utils/socket");
+const { useStreakFreeze, recalculateUserStreak } = require("../Utils/streakService");
 const {
   validateImageFile,
   uploadProfileAvatar,
@@ -51,11 +55,43 @@ const setCookieOptions = () => ({
 // @desc Register user
 // @route POST /api/auth/register
 const register = asyncHandler(async (req, res) => {
-  const { name, email, password, timezone, age, gender, height, currentWeight, targetWeight, fitnessGoal, activityLevel, dietPreference } = req.body;
+  const {
+    name,
+    email,
+    password,
+    timezone,
+    age,
+    gender,
+    height,
+    currentWeight,
+    targetWeight,
+    fitnessGoal,
+    activityLevel,
+    dietPreference,
+    inviteCode,
+    needsOnboarding,
+  } = req.body;
 
   const existing = await User.findOne({ email: email.toLowerCase() });
   if (existing) {
     return sendError(res, "An account with this email already exists", 400);
+  }
+
+  let inviteGroup = null;
+  if (inviteCode && String(inviteCode).trim()) {
+    inviteGroup = await Group.findOne({
+      inviteCode: String(inviteCode).trim().toUpperCase(),
+      isActive: true,
+    });
+    if (inviteGroup) {
+      const activeCount = await Membership.countDocuments({
+        groupId: inviteGroup._id,
+        status: "active",
+      });
+      if (activeCount >= inviteGroup.maxMembers) {
+        inviteGroup = null; // still let them register cleanly, don't fail signup
+      }
+    }
   }
 
   const user = await User.create({
@@ -63,6 +99,7 @@ const register = asyncHandler(async (req, res) => {
     email: email.toLowerCase(),
     password,
     timezone: timezone || config.DEFAULT_TIMEZONE,
+    needsOnboarding: Boolean(needsOnboarding || inviteCode),
   });
 
   // Calculate customized starting targets
@@ -94,6 +131,25 @@ const register = asyncHandler(async (req, res) => {
     featureFlagsConfigured: true,
   });
 
+  let joinedGroup = null;
+  if (inviteGroup) {
+    await Membership.create({
+      groupId: inviteGroup._id,
+      userId: user._id,
+      role: "member",
+      status: "active",
+    });
+    joinedGroup = {
+      _id: inviteGroup._id,
+      name: inviteGroup.name,
+      inviteCode: inviteGroup.inviteCode,
+    };
+    emitGroupActivity(inviteGroup._id.toString(), "member-joined", {
+      userId: user._id,
+      userName: user.name,
+    });
+  }
+
   const { accessToken, refreshToken } = generateTokens(user);
   res.cookie("ft_refresh_token", refreshToken, setCookieOptions());
 
@@ -106,8 +162,15 @@ const register = asyncHandler(async (req, res) => {
         email: user.email,
         profileImage: user.profileImage,
         timezone: user.timezone,
+        currentStreak: user.currentStreak || 0,
+        longestStreak: user.longestStreak || 0,
+        lastLogDate: user.lastLogDate || "",
+        streakFreeze: user.streakFreeze,
+        socialPrivacy: user.socialPrivacy,
+        needsOnboarding: user.needsOnboarding,
       },
       profile,
+      joinedGroup,
       accessToken,
     },
     "User registered successfully",
@@ -142,6 +205,12 @@ const login = asyncHandler(async (req, res) => {
       email: user.email,
       profileImage: user.profileImage,
       timezone: user.timezone,
+      currentStreak: user.currentStreak || 0,
+      longestStreak: user.longestStreak || 0,
+      lastLogDate: user.lastLogDate || "",
+      streakFreeze: user.streakFreeze,
+      socialPrivacy: user.socialPrivacy,
+      needsOnboarding: Boolean(user.needsOnboarding),
     },
     profile,
     accessToken,
@@ -207,12 +276,14 @@ const updateProfile = asyncHandler(async (req, res) => {
     featureFlags,
     targetDefaults,
     hideWeightNumbers,
+    needsOnboarding,
   } = req.body;
 
-  if (name || timezone) {
+  if (name || timezone || needsOnboarding !== undefined) {
     await User.findByIdAndUpdate(req.user._id, {
       ...(name && { name }),
       ...(timezone && { timezone }),
+      ...(needsOnboarding !== undefined && { needsOnboarding: Boolean(needsOnboarding) }),
     });
     if (timezone) {
       const ReminderSetting = require("../Modals/ReminderSetting");
@@ -439,6 +510,52 @@ const removeAvatar = asyncHandler(async (req, res) => {
   return sendSuccess(res, { user: cleanUser }, "Profile photo removed");
 });
 
+// @desc Update social privacy settings (feed weight visibility, recap weight visibility, nudges)
+// @route PUT /api/users/me/social-settings
+const updateSocialSettings = asyncHandler(async (req, res) => {
+  const { showWeightInFeed, showWeightInRecap, allowNudges } = req.body;
+  const user = await User.findById(req.user._id);
+  if (!user) {
+    return sendError(res, "User not found", 404);
+  }
+
+  user.socialPrivacy = {
+    showWeightInFeed:
+      showWeightInFeed !== undefined
+        ? Boolean(showWeightInFeed)
+        : Boolean(user.socialPrivacy?.showWeightInFeed),
+    showWeightInRecap:
+      showWeightInRecap !== undefined
+        ? Boolean(showWeightInRecap)
+        : Boolean(user.socialPrivacy?.showWeightInRecap),
+    allowNudges:
+      allowNudges !== undefined
+        ? Boolean(allowNudges)
+        : user.socialPrivacy?.allowNudges !== false,
+  };
+  await user.save();
+
+  return sendSuccess(
+    res,
+    { socialPrivacy: user.socialPrivacy, user },
+    "Social privacy settings updated"
+  );
+});
+
+// @desc Activate weekly streak freeze (1 per Mon-Sun week)
+// @route POST /api/users/me/streak-freeze
+const activateStreakFreeze = asyncHandler(async (req, res) => {
+  const result = await useStreakFreeze(req.user._id, req.body?.targetDate || null);
+  if (!result.ok) {
+    return sendError(res, result.reason, 400);
+  }
+  return sendSuccess(
+    res,
+    result,
+    `Streak freeze applied for ${result.frozenDate}! Your streak is safe ❄️`
+  );
+});
+
 module.exports = {
   register,
   login,
@@ -449,4 +566,6 @@ module.exports = {
   updateFeatureSettings,
   uploadAvatar,
   removeAvatar,
+  updateSocialSettings,
+  activateStreakFreeze,
 };

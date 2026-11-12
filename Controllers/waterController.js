@@ -4,6 +4,8 @@ const asyncHandler = require("../Utils/asyncHandler");
 const { sendSuccess, sendError } = require("../Utils/apiResponse");
 const { getLocalDateString } = require("../Utils/date");
 const { POINTS_RULES, syncDailyHabitPoints } = require("../Utils/gamification");
+const { recalculateUserStreak } = require("../Utils/streakService");
+const { emitSquadFeedEvent } = require("../Utils/feedService");
 
 const syncWaterGamification = async ({
   user,
@@ -91,6 +93,18 @@ const addWater = asyncHandler(async (req, res) => {
     targetMl: waterLog.targetMl,
     notifyGoalHit: crossedGoalNow,
   });
+
+  await recalculateUserStreak(req.user._id).catch(() => {});
+  if (crossedGoalNow) {
+    await emitSquadFeedEvent({
+      userId: req.user._id,
+      type: "water_goal",
+      title: `hit their ${Math.round(waterLog.targetMl / 1000 * 10) / 10}L hydration goal! 💧`,
+      dateKey: logDate,
+      dedupeKey: `water_goal_${req.user._id}_${logDate}`,
+      meta: { totalConsumed, targetMl: waterLog.targetMl },
+    }).catch(() => {});
+  }
 
   return sendSuccess(res, {
     waterLog,

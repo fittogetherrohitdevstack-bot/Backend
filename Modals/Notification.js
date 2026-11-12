@@ -22,6 +22,8 @@ const notificationSchema = new mongoose.Schema(
         "photos",
         "weekly_target",
         "reminder",
+        "nudge",
+        "recap",
       ],
       default: "group",
     },

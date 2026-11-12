@@ -18,8 +18,34 @@ const challengeSchema = new mongoose.Schema(
     },
     challengeType: {
       type: String,
-      enum: ["meal_completion", "workout_days", "water_goal", "streak"],
+      enum: [
+        "meal_completion",
+        "workout_days",
+        "water_goal",
+        "streak",
+        "water_5_days",
+        "most_days_logged",
+        "most_meals_ticked",
+        "full_diet_completion",
+      ],
       required: true,
+    },
+    templateKey: {
+      type: String,
+      default: "",
+    },
+    isAutoWeekly: {
+      type: Boolean,
+      default: false,
+    },
+    weekStart: {
+      type: String,
+      default: "",
+    },
+    winnerUserIds: {
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: "User",
+      default: [],
     },
     target: {
       type: Number,

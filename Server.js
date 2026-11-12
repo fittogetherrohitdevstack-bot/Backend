@@ -5,6 +5,7 @@ const connectToDb = require("./Config/db");
 const app = require("./App");
 const setupSockets = require("./Sockets");
 const { startReminderCron, stopReminderCron } = require("./Utils/reminderScheduler");
+const { startSocialCron, stopSocialCron } = require("./Utils/socialCron");
 
 const PORT = config.PORT || 5000;
 const server = http.createServer(app);
@@ -20,6 +21,7 @@ const shutdown = async () => {
   console.log("\n🛑 Gracefully shutting down server...");
 
   stopReminderCron();
+  stopSocialCron();
 
   try {
     server.close(() => {
@@ -49,6 +51,7 @@ if (process.env.NODE_ENV !== "test") {
       server.listen(PORT, () => {
         console.log(`🚀 FitTogether Server running on port ${PORT} [${config.NODE_ENV}]`);
         startReminderCron();
+        startSocialCron();
       });
     })
     .catch((err) => {

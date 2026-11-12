@@ -118,6 +118,39 @@ const joinChallenge = asyncHandler(async (req, res) => {
   return sendSuccess(res, { entry }, "Joined challenge successfully", 201);
 });
 
+const Membership = require("../Modals/Membership");
+const {
+  CHALLENGE_TEMPLATES,
+  computeChallengeMemberProgress,
+  ensureWeeklyChallengeForGroup,
+} = require("../Utils/challengeService");
+
+// @desc List available Mon-Sun weekly challenge templates
+// @route GET /api/groups/:id/challenges/templates
+const getChallengeTemplates = asyncHandler(async (req, res) => {
+  return sendSuccess(res, { templates: CHALLENGE_TEMPLATES });
+});
+
+// @desc Admin picks/switches active weekly challenge template for squad
+// @route POST /api/groups/:id/challenges/weekly
+const selectWeeklyChallengeTemplate = asyncHandler(async (req, res) => {
+  const { templateKey } = req.body;
+  const challenge = await ensureWeeklyChallengeForGroup(req.group._id, {
+    templateKey: templateKey || null,
+    createdBy: req.user._id,
+  });
+
+  if (templateKey && req.group) {
+    req.group.challengeSettings = {
+      ...(req.group.challengeSettings || {}),
+      preferredTemplate: templateKey,
+    };
+    await req.group.save();
+  }
+
+  return sendSuccess(res, { challenge }, "Weekly challenge updated for squad");
+});
+
 // @desc Get challenge details & standings
 // @route GET /api/challenges/:id
 const getChallengeDetails = asyncHandler(async (req, res) => {
@@ -126,52 +159,29 @@ const getChallengeDetails = asyncHandler(async (req, res) => {
     return sendError(res, "Challenge not found", 404);
   }
 
+  const membership = await Membership.findOne({
+    groupId: challenge.groupId,
+    userId: req.user._id,
+    status: "active",
+  }).lean();
+
+  if (!membership) {
+    return sendError(res, "Forbidden: you must be a member of this squad", 403);
+  }
+
   const entries = await ChallengeEntry.find({ challengeId: challenge._id })
     .populate("userId", "name email profileImage");
 
-  // Re-compute each participant's progress live from real logs
   const standings = [];
 
   for (const entry of entries) {
     if (!entry.userId) continue;
     const uId = entry.userId._id;
-    let actualProgress = 0;
-
-    if (challenge.challengeType === "meal_completion") {
-      const logs = await MealLog.find({
-        userId: uId,
-        date: { $gte: challenge.startDate, $lte: challenge.endDate },
-      }).lean();
-      // Count days with >= 80% meal completion (consistent with dashboard/tracker totals)
-      logs.forEach((log) => {
-        if (log.meals && log.meals.length > 0) {
-          const totals = calculateChartTotals(log.meals);
-          const pct =
-            totals.totalItems > 0
-              ? totals.completionPercentage
-              : Math.round((totals.mealsCompleted / totals.totalMeals) * 100);
-          if (pct >= 80) actualProgress += 1;
-        }
-      });
-    } else if (challenge.challengeType === "workout_days") {
-      const workouts = await WorkoutSession.find({
-        userId: uId,
-        date: { $gte: challenge.startDate, $lte: challenge.endDate },
-        status: { $in: ["completed", "rest"] },
-      });
-      actualProgress = workouts.length;
-    } else if (challenge.challengeType === "water_goal") {
-      const waterLogs = await WaterLog.find({
-        userId: uId,
-        date: { $gte: challenge.startDate, $lte: challenge.endDate },
-      });
-      waterLogs.forEach((w) => {
-        const total = w.entries.reduce((sum, e) => sum + e.amountMl, 0);
-        if (total >= w.targetMl) actualProgress += 1;
-      });
-    } else if (challenge.challengeType === "streak") {
-      actualProgress = entry.progress;
-    }
+    const actualProgress = await computeChallengeMemberProgress(
+      challenge,
+      uId,
+      entry.progress
+    );
 
     const isCompleted = actualProgress >= challenge.target;
     if (entry.progress !== actualProgress || entry.completed !== isCompleted) {
@@ -207,4 +217,6 @@ module.exports = {
   getGroupChallenges,
   joinChallenge,
   getChallengeDetails,
+  getChallengeTemplates,
+  selectWeeklyChallengeTemplate,
 };

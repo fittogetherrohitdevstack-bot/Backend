@@ -2,8 +2,9 @@ const mongoose = require("mongoose");
 const connectToDb = require("../../Config/db");
 const migration001 = require("./001_feature_flags_and_defaults");
 const migration002 = require("./002_legacy_photos_audit_and_link");
+const migration003 = require("./003_social_engagement_backfill");
 
-const MIGRATIONS = [migration001, migration002];
+const MIGRATIONS = [migration001, migration002, migration003];
 
 async function runMigrations({ dryRun = false, optInUserIds = [], logger = console } = {}) {
   const results = [];

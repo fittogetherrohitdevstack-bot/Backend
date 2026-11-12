@@ -49,6 +49,23 @@ const reminderSettingSchema = new mongoose.Schema(
       min: 5,
       max: 720,
     },
+    dailyReminder: {
+      enabled: { type: Boolean, default: true },
+      time: { type: String, default: "20:00" },
+    },
+    squadStreakAtRisk: {
+      enabled: { type: Boolean, default: true },
+      time: { type: String, default: "20:30" },
+    },
+    nudges: {
+      enabled: { type: Boolean, default: true },
+    },
+    challengeUpdates: {
+      enabled: { type: Boolean, default: true },
+    },
+    weeklyRecapReady: {
+      enabled: { type: Boolean, default: true },
+    },
   },
   {
     collection: "reminderSettings",

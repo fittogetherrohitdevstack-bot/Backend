@@ -63,6 +63,33 @@ const syncMealGamificationAndNotify = async ({
         }
       : null,
   });
+
+  if (notifyFeed) {
+    try {
+      const { recalculateUserStreak } = require("../Utils/streakService");
+      await recalculateUserStreak(userId).catch(() => {});
+
+      const totals = calculateChartTotals(meals);
+      const isFullDietDone =
+        totalMeals > 0 &&
+        ((totals.totalItems > 0 && totals.completionPercentage >= 100) ||
+          eatenMeals >= totalMeals);
+
+      if (isFullDietDone) {
+        const { emitSquadFeedEvent } = require("../Utils/feedService");
+        await emitSquadFeedEvent({
+          userId,
+          type: "diet_completed",
+          title: "completed 100% of their diet chart! 🥗",
+          dateKey: dateStr,
+          dedupeKey: `diet_completed_${userId}_${dateStr}`,
+          meta: { totalMeals },
+        }).catch(() => {});
+      }
+    } catch (_) {
+      // Non-blocking in isolated unit tests
+    }
+  }
 };
 
 /**
@@ -1024,6 +1051,29 @@ const getMyDashboardSummary = asyncHandler(async (req, res) => {
     waterTargetMl,
   });
 
+  // Also load social streak metadata (freeze, longestStreak, lastLogDate) safely
+  let userSocialStreak = null;
+  try {
+    const User = require("../Modals/User");
+    if (typeof User.findById === "function") {
+      const uQuery = User.findById(req.user._id).select(
+        "currentStreak longestStreak lastLogDate streakFreeze socialPrivacy"
+      );
+      userSocialStreak = typeof uQuery?.lean === "function" ? await uQuery.lean() : await uQuery;
+    }
+  } catch (_) {
+    userSocialStreak = null;
+  }
+
+  const effectiveCurrentStreak = Math.max(
+    streakStats.currentStreak || 0,
+    userSocialStreak?.currentStreak || 0
+  );
+  const effectiveBestStreak = Math.max(
+    streakStats.bestStreak || 0,
+    userSocialStreak?.longestStreak || 0
+  );
+
   return sendSuccess(res, {
     date: todayStr,
     profile,
@@ -1049,8 +1099,16 @@ const getMyDashboardSummary = asyncHandler(async (req, res) => {
           durationMinutes: workoutSession.durationMinutes,
         }
       : null,
-    streak: streakStats.currentStreak,
-    streakDetails: streakStats,
+    streak: effectiveCurrentStreak,
+    streakDetails: {
+      ...streakStats,
+      currentStreak: effectiveCurrentStreak,
+      bestStreak: effectiveBestStreak,
+      longestStreak: effectiveBestStreak,
+      lastLogDate: userSocialStreak?.lastLogDate || "",
+      freezeAvailable: userSocialStreak?.streakFreeze?.available !== false,
+      usedFreezeDates: userSocialStreak?.streakFreeze?.usedDates || [],
+    },
   });
 });
 

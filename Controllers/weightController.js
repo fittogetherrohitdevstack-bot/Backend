@@ -4,6 +4,8 @@ const asyncHandler = require("../Utils/asyncHandler");
 const { sendSuccess, sendError } = require("../Utils/apiResponse");
 const { POINTS_RULES } = require("../Utils/gamification");
 const { awardConsistencyPoints } = require("../Utils/consistencyPoints");
+const { recalculateUserStreak } = require("../Utils/streakService");
+const { emitSquadFeedEvent } = require("../Utils/feedService");
 const {
   getLocalDateString,
   getISOWeekDetails,
@@ -60,6 +62,16 @@ const upsertWeight = asyncHandler(async (req, res) => {
     points: POINTS_RULES.WEIGH_IN_LOGGED,
     meta: { logged: true },
   });
+
+  await recalculateUserStreak(req.user._id).catch(() => {});
+  await emitSquadFeedEvent({
+    userId: req.user._id,
+    type: "logged_weight",
+    title: "logged weight ✅",
+    dateKey: entryDate,
+    dedupeKey: `weight_${req.user._id}_${entryDate}`,
+    weightKg: weightLog.weightKg,
+  }).catch(() => {});
 
   return sendSuccess(res, { weightLog }, "Weight logged successfully");
 });

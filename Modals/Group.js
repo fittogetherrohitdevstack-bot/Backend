@@ -35,6 +35,27 @@ const groupSchema = new mongoose.Schema(
       min: 2,
       max: 50,
     },
+    currentStreak: {
+      type: Number,
+      default: 0,
+    },
+    longestStreak: {
+      type: Number,
+      default: 0,
+    },
+    lastLogDate: {
+      type: String,
+      default: "",
+    },
+    challengeSettings: {
+      autoRotate: { type: Boolean, default: true },
+      preferredTemplate: { type: String, default: "" },
+      rotationIndex: { type: Number, default: 0 },
+    },
+    weeklyStakes: {
+      enabled: { type: Boolean, default: false },
+      forfeitText: { type: String, default: "", maxlength: 140 },
+    },
   },
   {
     timestamps: true,

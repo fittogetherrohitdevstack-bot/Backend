@@ -4,10 +4,15 @@ const groupController = require("../Controllers/groupController");
 const leaderboardController = require("../Controllers/leaderboardController");
 const challengeController = require("../Controllers/challengeController");
 const photoSetController = require("../Controllers/photoSetController");
+const feedController = require("../Controllers/feedController");
+const nudgeController = require("../Controllers/nudgeController");
 const protect = require("../Middleware/auth");
 const { checkGroupMember } = require("../Middleware/groupAuth");
 const validate = require("../Middleware/validate");
 const { z } = require("zod");
+
+// Public invite code preview (no sensitive logs or member PII)
+router.get("/invite/:code", groupController.getInvitePreview);
 
 router.use(protect);
 
@@ -40,6 +45,25 @@ router.get("/:id", checkGroupMember(), groupController.getGroupById);
 router.put(
   "/:id",
   checkGroupMember({ requireAdmin: true }),
+  validate({
+    body: z.object({
+      name: z.string().min(2).max(60).optional(),
+      description: z.string().max(300).optional(),
+      maxMembers: z.number().min(2).max(50).optional(),
+      weeklyStakes: z
+        .object({
+          enabled: z.boolean().optional(),
+          forfeitText: z.string().max(140).optional(),
+        })
+        .optional(),
+      challengeSettings: z
+        .object({
+          autoRotate: z.boolean().optional(),
+          preferredTemplate: z.string().optional(),
+        })
+        .optional(),
+    }),
+  }),
   groupController.updateGroup
 );
 router.get("/:id/members", checkGroupMember(), groupController.getGroupMembers);
@@ -58,7 +82,38 @@ router.get("/:id/dashboard", checkGroupMember(), groupController.getGroupDashboa
 router.get("/:id/shared-photos", checkGroupMember(), photoSetController.getGroupSharedPhotos);
 router.get("/:id/leaderboard", checkGroupMember(), leaderboardController.getGroupLeaderboard);
 
-// Challenges within group
+// Social Engagement: Feed, Member Status Strip & Nudges
+router.get("/:id/feed", checkGroupMember(), feedController.getGroupFeed);
+router.get("/:id/today-status", checkGroupMember(), nudgeController.getSquadTodayStatus);
+router.post(
+  "/:id/nudge",
+  checkGroupMember(),
+  validate({
+    body: z.object({
+      targetUserId: z.string().min(1),
+      message: z.string().max(140).optional(),
+    }),
+  }),
+  nudgeController.nudgeMember
+);
+
+// Challenges within group + weekly templates
+router.get("/:id/challenges/templates", checkGroupMember(), challengeController.getChallengeTemplates);
+router.post(
+  "/:id/challenges/weekly",
+  checkGroupMember({ requireAdmin: true }),
+  validate({
+    body: z.object({
+      templateKey: z.enum([
+        "water_5_days",
+        "most_days_logged",
+        "most_meals_ticked",
+        "full_diet_completion",
+      ]).optional(),
+    }),
+  }),
+  challengeController.selectWeeklyChallengeTemplate
+);
 router.post("/:id/challenges", checkGroupMember(), challengeController.createChallenge);
 router.get("/:id/challenges", checkGroupMember(), challengeController.getGroupChallenges);
 

@@ -18,6 +18,8 @@ const registerSchema = {
     fitnessGoal: z.string().optional(),
     activityLevel: z.string().optional(),
     dietPreference: z.string().optional(),
+    inviteCode: z.string().optional(),
+    needsOnboarding: z.boolean().optional(),
   }),
 };
 

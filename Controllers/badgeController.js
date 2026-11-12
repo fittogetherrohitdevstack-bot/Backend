@@ -5,10 +5,13 @@ const WorkoutSession = require("../Modals/WorkoutSession");
 const WaterLog = require("../Modals/WaterLog");
 const ChallengeEntry = require("../Modals/ChallengeEntry");
 const Membership = require("../Modals/Membership");
+const User = require("../Modals/User");
 const asyncHandler = require("../Utils/asyncHandler");
 const { sendSuccess } = require("../Utils/apiResponse");
 const { SEEDED_BADGES } = require("../Utils/gamification");
 const { emitGroupActivity } = require("../Utils/socket");
+const { emitSquadFeedEvent } = require("../Utils/feedService");
+const { getLocalDateString } = require("../Utils/date");
 
 // @desc Get user's earned and available badges
 // @route GET /api/users/me/badges
@@ -67,7 +70,43 @@ const getMyBadges = asyncHandler(async (req, res) => {
     if (workoutCount >= 4) newlyEarned.push("IRON_REGULAR");
   }
 
+  const userDoc = await User.findById(req.user._id).select("currentStreak longestStreak timezone").lean();
+
+  // Check STREAK_7 (7-Day Streak) & STREAK_30
+  if (!earnedMap.has("STREAK_7") && (userDoc?.longestStreak || 0) >= 7) {
+    newlyEarned.push("STREAK_7");
+  }
+  if (!earnedMap.has("STREAK_30") && (userDoc?.longestStreak || 0) >= 30) {
+    newlyEarned.push("STREAK_30");
+  }
+
+  // Check CONSISTENCY_KING (14+ day streak)
+  if (!earnedMap.has("CONSISTENCY_KING") && (userDoc?.longestStreak || 0) >= 14) {
+    newlyEarned.push("CONSISTENCY_KING");
+  }
+
+  // Check WATER_WARRIOR (10 water goal days)
+  if (!earnedMap.has("WATER_WARRIOR")) {
+    const waterLogs = await WaterLog.find({ userId: req.user._id }).lean();
+    let hitDays = 0;
+    for (const w of waterLogs) {
+      const sum = (w.entries || []).reduce((acc, e) => acc + (e.amountMl || 0), 0);
+      if (sum >= Math.min(w.targetMl || 2000, 2000)) hitDays++;
+    }
+    if (hitDays >= 10) newlyEarned.push("WATER_WARRIOR");
+  }
+
+  // Check SQUAD_STAR (active in at least 1 squad & 50+ XP / 1+ challenge joined)
+  if (!earnedMap.has("SQUAD_STAR")) {
+    const [inSquad, hasEntry] = await Promise.all([
+      Membership.exists({ userId: req.user._id, status: "active" }),
+      ChallengeEntry.exists({ userId: req.user._id }),
+    ]);
+    if (inSquad && hasEntry) newlyEarned.push("SQUAD_STAR");
+  }
+
   // Save any newly awarded badges
+  const todayStr = getLocalDateString(new Date(), userDoc?.timezone || "Asia/Kolkata");
   if (newlyEarned.length > 0) {
     const membership = await Membership.findOne({
       userId: req.user._id,
@@ -83,8 +122,17 @@ const getMyBadges = asyncHandler(async (req, res) => {
       });
       earnedMap.set(code, ub.earnedAt);
 
+      const badgeInfo = catalog.find((b) => b.code === code);
+      await emitSquadFeedEvent({
+        userId: req.user._id,
+        type: "badge_earned",
+        title: `unlocked the ${badgeInfo?.name || code} badge! 🏅`,
+        dateKey: todayStr,
+        dedupeKey: `badge_${req.user._id}_${code}`,
+        meta: { badgeCode: code, badgeName: badgeInfo?.name || code },
+      });
+
       if (membership) {
-        const badgeInfo = catalog.find((b) => b.code === code);
         emitGroupActivity(membership.groupId.toString(), "badge-earned", {
           userId: req.user._id,
           userName: req.user.name,
@@ -102,11 +150,13 @@ const getMyBadges = asyncHandler(async (req, res) => {
     icon: b.icon,
     isEarned: earnedMap.has(b.code),
     earnedAt: earnedMap.get(b.code) || null,
+    isNewlyUnlocked: newlyEarned.includes(b.code),
   }));
 
   return sendSuccess(res, {
     badges,
     totalEarned: earnedMap.size,
+    newlyEarned,
   });
 });
 

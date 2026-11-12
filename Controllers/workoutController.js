@@ -5,6 +5,7 @@ const asyncHandler = require("../Utils/asyncHandler");
 const { sendSuccess, sendError } = require("../Utils/apiResponse");
 const { getLocalDateString, getDayOfWeek } = require("../Utils/date");
 const { POINTS_RULES, syncDailyHabitPoints } = require("../Utils/gamification");
+const { recalculateUserStreak } = require("../Utils/streakService");
 
 const syncWorkoutPointsAndNotify = async (user, sessionDate, session) => {
   const isCompletedOrRest =
@@ -39,6 +40,8 @@ const syncWorkoutPointsAndNotify = async (user, sessionDate, session) => {
         }
       : null,
   });
+
+  await recalculateUserStreak(user._id).catch(() => {});
 };
 
 // @desc Create workout plan
