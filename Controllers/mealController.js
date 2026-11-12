@@ -19,6 +19,10 @@ const {
   calculateMealPoints,
   syncDailyHabitPoints,
 } = require("../Utils/gamification");
+const {
+  resolvePlanMealsForDate,
+  buildMealSnapshotFromPlan,
+} = require("../Utils/dietSchedule");
 
 /**
  * Keeps squad meal points (`PointsLedger`) and real-time socket feed synced
@@ -171,48 +175,26 @@ const getDayChart = asyncHandler(async (req, res) => {
   // 1. Check if user already has a MealLog for this date
   let mealLog = await MealLog.findOne({ userId, date: dateStr });
 
-  if (!mealLog) {
-    // 2. Check for active DietPlan covering this date
-    const dayOfWeek = getDayOfWeek(dateStr);
-    const activePlan = await DietPlan.findOne({
-      userId,
-      isActive: true,
-      startDate: { $lte: dateStr },
-      endDate: { $gte: dateStr },
-    });
+  const activePlan = await DietPlan.findOne({
+    userId,
+    isActive: true,
+    startDate: { $lte: dateStr },
+    endDate: { $gte: dateStr },
+  });
+  const planResolved = activePlan ? resolvePlanMealsForDate(activePlan, dateStr) : null;
 
-    if (activePlan) {
-      const daySchedule = activePlan.days.find((d) => d.dayOfWeek === dayOfWeek);
-      const planMeals = daySchedule ? daySchedule.meals : [];
+  if (!mealLog && activePlan && planResolved) {
+    // 2. Auto-generate checklist snapshot from active DietPlan
+    const planMeals = planResolved.meals || [];
 
-      if (planMeals.length > 0) {
-        const snapshotMeals = planMeals.map((m) => ({
-          mealId: m.mealId || crypto.randomUUID(),
-          mealName: m.name,
-          scheduledTime: m.scheduledTime || "08:00",
-          plannedFoodItems: (m.foodItems || []).map((f) => ({
-            itemId: crypto.randomUUID(),
-            name: f.name,
-            quantity: f.quantity,
-            unit: f.unit || "g",
-            calories: f.calories || 0,
-            protein: f.protein || 0,
-            carbs: f.carbs || 0,
-            fats: f.fats || 0,
-            eaten: false,
-          })),
-          status: "pending",
-          actualFoodItems: [],
-        }));
-
-        mealLog = await MealLog.create({
-          userId,
-          groupId: activePlan.groupId,
-          dietPlanId: activePlan._id,
-          date: dateStr,
-          meals: snapshotMeals,
-        });
-      }
+    if (planMeals.length > 0) {
+      mealLog = await MealLog.create({
+        userId,
+        groupId: activePlan.groupId,
+        dietPlanId: activePlan._id,
+        date: dateStr,
+        meals: buildMealSnapshotFromPlan(planMeals),
+      });
     }
   }
 
@@ -250,6 +232,13 @@ const getDayChart = asyncHandler(async (req, res) => {
   if (!mealLog) {
     return sendSuccess(res, {
       mealLog: null,
+      planVariant: planResolved
+        ? {
+            mode: planResolved.mode,
+            variantKey: planResolved.variantKey,
+            variantLabel: planResolved.variantLabel,
+          }
+        : null,
       plannedTotals: { calories: 0, protein: 0, carbs: 0, fats: 0 },
       consumedTotals: { calories: 0, protein: 0, carbs: 0, fats: 0 },
       itemsCompleted: 0,
@@ -265,6 +254,13 @@ const getDayChart = asyncHandler(async (req, res) => {
 
   return sendSuccess(res, {
     mealLog,
+    planVariant: planResolved
+      ? {
+          mode: planResolved.mode,
+          variantKey: planResolved.variantKey,
+          variantLabel: planResolved.variantLabel,
+        }
+      : null,
     ...totals,
   });
 });
@@ -812,8 +808,18 @@ const getMealsSummary = asyncHandler(async (req, res) => {
     }
   }
 
-  // Current streak (counting backwards from today)
-  for (let i = dailyDetails.length - 1; i >= 0; i--) {
+  // Current streak (counting backwards; if today is still in progress, preserve active streak from yesterday)
+  const todayStr = getLocalDateString(new Date(), timezone);
+  let startIdx = dailyDetails.length - 1;
+  if (
+    startIdx >= 0 &&
+    dailyDetails[startIdx].date === todayStr &&
+    !(dailyDetails[startIdx].logged && dailyDetails[startIdx].completionPercentage >= 80)
+  ) {
+    startIdx -= 1;
+  }
+
+  for (let i = startIdx; i >= 0; i--) {
     const day = dailyDetails[i];
     if (day.logged && day.completionPercentage >= 80) {
       currentStreak++;
@@ -869,6 +875,101 @@ const getMealHistory = asyncHandler(async (req, res) => {
   return sendSuccess(res, { logs });
 });
 
+const runLeanQuery = async (query) =>
+  query && typeof query.lean === "function" ? query.lean() : query;
+
+/**
+ * Computes consecutive active fitness days across meals, workouts, and hydration.
+ * If today is still in progress with no qualifying activity yet, preserves an ongoing
+ * streak ending yesterday so morning check-ins never flash 0.
+ */
+const computeActiveHabitStreak = async ({
+  userId,
+  timezone = "Asia/Kolkata",
+  todayStr,
+  waterTargetMl = 3000,
+  lookbackDays = 60,
+}) => {
+  const recentDates = getRecentDays(lookbackDays, timezone);
+  if (!recentDates.length) {
+    return { currentStreak: 0, bestStreak: 0, todayActive: false };
+  }
+
+  const endDate = todayStr || recentDates[recentDates.length - 1];
+  const dates = recentDates[recentDates.length - 1] === endDate
+    ? recentDates
+    : [...recentDates.filter((d) => d < endDate), endDate];
+
+  const startDate = dates[0];
+  const dateFilter = { userId, date: { $gte: startDate, $lte: endDate } };
+
+  const [mealLogs = [], workoutLogs = [], waterLogs = []] = await Promise.all([
+    runLeanQuery(MealLog.find(dateFilter)),
+    runLeanQuery(WorkoutSession.find(dateFilter)),
+    runLeanQuery(WaterLog.find(dateFilter)),
+  ]);
+
+  const mealByDate = new Map((mealLogs || []).map((m) => [m.date, m]));
+  const workoutByDate = new Map((workoutLogs || []).map((w) => [w.date, w]));
+  const waterByDate = new Map((waterLogs || []).map((w) => [w.date, w]));
+
+  const isDateActive = (dateStr) => {
+    const mealLog = mealByDate.get(dateStr);
+    if (mealLog && Array.isArray(mealLog.meals) && mealLog.meals.length > 0) {
+      const mealTotals = calculateChartTotals(mealLog.meals);
+      if (
+        mealTotals.itemsCompleted > 0 ||
+        mealTotals.mealsCompleted > 0 ||
+        mealTotals.completionPercentage >= 50 ||
+        mealTotals.consumedTotals.calories > 0
+      ) {
+        return true;
+      }
+    }
+
+    const workout = workoutByDate.get(dateStr);
+    if (workout && (workout.status === "completed" || workout.status === "rest")) {
+      return true;
+    }
+
+    const water = waterByDate.get(dateStr);
+    if (water && Array.isArray(water.entries)) {
+      const consumedMl = water.entries.reduce((sum, e) => sum + (Number(e.amountMl) || 0), 0);
+      const dayWaterTarget = waterTargetMl || water.targetMl || 3000;
+      if (dayWaterTarget > 0 && consumedMl >= dayWaterTarget * 0.75) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  const activeFlags = dates.map((d) => isDateActive(d));
+
+  let bestStreak = 0;
+  let running = 0;
+  for (const active of activeFlags) {
+    if (active) {
+      running++;
+      if (running > bestStreak) bestStreak = running;
+    } else {
+      running = 0;
+    }
+  }
+
+  const lastIdx = activeFlags.length - 1;
+  const todayActive = Boolean(activeFlags[lastIdx]);
+  let checkIdx = todayActive ? lastIdx : lastIdx - 1;
+  let currentStreak = 0;
+
+  while (checkIdx >= 0 && activeFlags[checkIdx]) {
+    currentStreak++;
+    checkIdx--;
+  }
+
+  return { currentStreak, bestStreak, todayActive };
+};
+
 const getMyDashboardSummary = asyncHandler(async (req, res) => {
   const timezone = req.user.timezone || "Asia/Kolkata";
   const todayStr = getLocalDateString(new Date(), timezone);
@@ -916,6 +1017,13 @@ const getMyDashboardSummary = asyncHandler(async (req, res) => {
     date: todayStr,
   });
 
+  const streakStats = await computeActiveHabitStreak({
+    userId: req.user._id,
+    timezone,
+    todayStr,
+    waterTargetMl,
+  });
+
   return sendSuccess(res, {
     date: todayStr,
     profile,
@@ -941,7 +1049,8 @@ const getMyDashboardSummary = asyncHandler(async (req, res) => {
           durationMinutes: workoutSession.durationMinutes,
         }
       : null,
-    streak: totals.completionPercentage >= 80 ? 1 : 0,
+    streak: streakStats.currentStreak,
+    streakDetails: streakStats,
   });
 });
 

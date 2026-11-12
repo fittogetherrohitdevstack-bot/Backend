@@ -62,6 +62,22 @@ const dietPlanSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    scheduleMode: {
+      type: String,
+      enum: ["weekly", "simple", "alternating"],
+      default: "weekly",
+    },
+    simpleMeals: {
+      type: [mealPlanSchema],
+      default: [],
+    },
+    alternatingConfig: {
+      anchorDate: { type: String, default: "" },
+      dietAName: { type: String, trim: true, default: "Diet A" },
+      dietBName: { type: String, trim: true, default: "Diet B" },
+      dietAMeals: { type: [mealPlanSchema], default: [] },
+      dietBMeals: { type: [mealPlanSchema], default: [] },
+    },
     days: {
       type: [dayPlanSchema],
       default: [],

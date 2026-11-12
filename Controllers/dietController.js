@@ -1,35 +1,87 @@
 const crypto = require("crypto");
 const DietPlan = require("../Modals/DietPlan");
 const DietTemplate = require("../Modals/DietTemplate");
+const MealLog = require("../Modals/MealLog");
 const asyncHandler = require("../Utils/asyncHandler");
 const { sendSuccess, sendError } = require("../Utils/apiResponse");
 const { getLocalDateString, getDayOfWeek } = require("../Utils/date");
+const {
+  formatPlanMeals,
+  resolvePlanMealsForDate,
+  buildMealSnapshotFromPlan,
+  hasMealLogUserProgress,
+} = require("../Utils/dietSchedule");
 
 // Helper to check if two date ranges overlap
 const checkOverlap = (startA, endA, startB, endB) => {
   return startA <= endB && endA >= startB;
 };
 
+const formatDaysArray = (days = []) =>
+  (days || []).map((day) => ({
+    dayOfWeek: Number(day.dayOfWeek),
+    meals: formatPlanMeals(day.meals || []),
+  }));
+
+const formatAlternatingConfig = (config, fallbackAnchor) => {
+  if (!config || typeof config !== "object") return undefined;
+  return {
+    anchorDate: config.anchorDate || fallbackAnchor || "",
+    dietAName: (config.dietAName || "Diet A").trim() || "Diet A",
+    dietBName: (config.dietBName || "Diet B").trim() || "Diet B",
+    dietAMeals: formatPlanMeals(config.dietAMeals || []),
+    dietBMeals: formatPlanMeals(config.dietBMeals || []),
+  };
+};
+
+/**
+ * Refreshes today's MealLog ONLY if the user hasn't checked off, skipped,
+ * or logged anything today yet. Past dates and logged meals are always preserved.
+ */
+const syncUntouchedTodayMealLog = async ({ userId, timezone, plan }) => {
+  if (!plan || !plan.isActive) return { preserved: false, synced: false };
+  const todayStr = getLocalDateString(new Date(), timezone || "Asia/Kolkata");
+  const todayLog = await MealLog.findOne({ userId, date: todayStr });
+  if (!todayLog) return { preserved: false, synced: false };
+
+  if (hasMealLogUserProgress(todayLog)) {
+    return { preserved: true, synced: false };
+  }
+
+  const { meals } = resolvePlanMealsForDate(plan, todayStr);
+  if (!meals || meals.length === 0) {
+    return { preserved: false, synced: false };
+  }
+
+  todayLog.dietPlanId = plan._id;
+  todayLog.groupId = plan.groupId || todayLog.groupId;
+  todayLog.meals = buildMealSnapshotFromPlan(meals);
+  await todayLog.save();
+  return { preserved: false, synced: true };
+};
+
 // @desc Create diet plan
 // @route POST /api/diet
 const createDietPlan = asyncHandler(async (req, res) => {
-  const { name, startDate, endDate, days, groupId, isActive } = req.body;
+  const {
+    name,
+    startDate,
+    endDate,
+    days,
+    groupId,
+    isActive,
+    scheduleMode,
+    simpleMeals,
+    alternatingConfig,
+  } = req.body;
   const userTimezone = req.user.timezone || "Asia/Kolkata";
-  const planStart = startDate || getLocalDateString(new Date(), userTimezone);
+  const todayStr = getLocalDateString(new Date(), userTimezone);
+  const planStart = startDate || todayStr;
   const planEnd = endDate || "2035-12-31"; // Default continuous ongoing plan
 
-  // Ensure stable meal IDs for all meals
-  const formattedDays = (days || []).map((day) => ({
-    dayOfWeek: Number(day.dayOfWeek),
-    meals: (day.meals || []).map((meal) => ({
-      mealId: meal.mealId || crypto.randomUUID(),
-      name: meal.name,
-      scheduledTime: meal.scheduledTime || "08:00",
-      foodItems: meal.foodItems || [],
-      notes: meal.notes || "",
-      alternatives: meal.alternatives || [],
-    })),
-  }));
+  const formattedDays = formatDaysArray(days || []);
+  const validModes = ["weekly", "simple", "alternating"];
+  const normalizedMode = validModes.includes(scheduleMode) ? scheduleMode : "weekly";
 
   // If set to active, ensure no overlapping active plans for this user
   if (isActive !== false) {
@@ -54,10 +106,25 @@ const createDietPlan = asyncHandler(async (req, res) => {
     startDate: planStart,
     endDate: planEnd,
     isActive: isActive !== false,
+    scheduleMode: normalizedMode,
+    simpleMeals: formatPlanMeals(simpleMeals || []),
+    alternatingConfig: formatAlternatingConfig(alternatingConfig, todayStr) || {
+      anchorDate: todayStr,
+      dietAName: "Diet A",
+      dietBName: "Diet B",
+      dietAMeals: [],
+      dietBMeals: [],
+    },
     days: formattedDays,
   });
 
-  return sendSuccess(res, { dietPlan }, "Diet plan created successfully", 201);
+  const syncStatus = await syncUntouchedTodayMealLog({
+    userId: req.user._id,
+    timezone: userTimezone,
+    plan: dietPlan,
+  });
+
+  return sendSuccess(res, { dietPlan, ...syncStatus }, "Diet plan created successfully", 201);
 });
 
 // @desc List user's diet plans
@@ -94,7 +161,19 @@ const updateDietPlan = asyncHandler(async (req, res) => {
     return sendError(res, "Diet plan not found or unauthorized", 404);
   }
 
-  const { name, startDate, endDate, days, isActive, groupId } = req.body;
+  const {
+    name,
+    startDate,
+    endDate,
+    days,
+    isActive,
+    groupId,
+    scheduleMode,
+    simpleMeals,
+    alternatingConfig,
+  } = req.body;
+  const userTimezone = req.user.timezone || "Asia/Kolkata";
+  const todayStr = getLocalDateString(new Date(), userTimezone);
 
   if (name) plan.name = name;
   if (startDate) plan.startDate = startDate;
@@ -102,22 +181,58 @@ const updateDietPlan = asyncHandler(async (req, res) => {
   if (groupId !== undefined) plan.groupId = groupId;
   if (isActive !== undefined) plan.isActive = isActive;
 
+  if (["weekly", "simple", "alternating"].includes(scheduleMode)) {
+    plan.scheduleMode = scheduleMode;
+  }
+
+  if (Array.isArray(simpleMeals)) {
+    plan.simpleMeals = formatPlanMeals(simpleMeals);
+  }
+
+  if (alternatingConfig && typeof alternatingConfig === "object") {
+    const prevConfig = plan.alternatingConfig?.toObject
+      ? plan.alternatingConfig.toObject()
+      : plan.alternatingConfig || {};
+    plan.alternatingConfig = {
+      anchorDate:
+        alternatingConfig.anchorDate !== undefined
+          ? alternatingConfig.anchorDate
+          : prevConfig.anchorDate || todayStr,
+      dietAName:
+        alternatingConfig.dietAName !== undefined
+          ? (alternatingConfig.dietAName || "Diet A").trim() || "Diet A"
+          : prevConfig.dietAName || "Diet A",
+      dietBName:
+        alternatingConfig.dietBName !== undefined
+          ? (alternatingConfig.dietBName || "Diet B").trim() || "Diet B"
+          : prevConfig.dietBName || "Diet B",
+      dietAMeals: Array.isArray(alternatingConfig.dietAMeals)
+        ? formatPlanMeals(alternatingConfig.dietAMeals)
+        : prevConfig.dietAMeals || [],
+      dietBMeals: Array.isArray(alternatingConfig.dietBMeals)
+        ? formatPlanMeals(alternatingConfig.dietBMeals)
+        : prevConfig.dietBMeals || [],
+    };
+  }
+
   if (days) {
-    plan.days = days.map((day) => ({
-      dayOfWeek: Number(day.dayOfWeek),
-      meals: (day.meals || []).map((meal) => ({
-        mealId: meal.mealId || crypto.randomUUID(),
-        name: meal.name,
-        scheduledTime: meal.scheduledTime || "08:00",
-        foodItems: meal.foodItems || [],
-        notes: meal.notes || "",
-        alternatives: meal.alternatives || [],
-      })),
-    }));
+    plan.days = formatDaysArray(days);
   }
 
   await plan.save();
-  return sendSuccess(res, { plan }, "Diet plan updated successfully");
+  const syncStatus = await syncUntouchedTodayMealLog({
+    userId: req.user._id,
+    timezone: userTimezone,
+    plan,
+  });
+
+  return sendSuccess(
+    res,
+    { plan, ...syncStatus },
+    syncStatus.preserved
+      ? "Diet plan updated! Today's logged meals were preserved; changes apply from tomorrow."
+      : "Diet plan updated successfully"
+  );
 });
 
 // @desc Delete diet plan
@@ -164,7 +279,13 @@ const activateDietPlan = asyncHandler(async (req, res) => {
   plan.isActive = true;
   await plan.save();
 
-  return sendSuccess(res, { plan }, "Diet plan activated successfully");
+  const syncStatus = await syncUntouchedTodayMealLog({
+    userId: req.user._id,
+    timezone: req.user.timezone || "Asia/Kolkata",
+    plan,
+  });
+
+  return sendSuccess(res, { plan, ...syncStatus }, "Diet plan activated successfully");
 });
 
 // @desc Duplicate one day's meals to another day (or to all days)
@@ -260,15 +381,18 @@ const getTodayPlannedMeals = asyncHandler(async (req, res) => {
     });
   }
 
-  const daySchedule = activePlan.days.find((d) => d.dayOfWeek === dayOfWeek);
+  const resolved = resolvePlanMealsForDate(activePlan, todayStr);
 
   return sendSuccess(res, {
     hasActivePlan: true,
     planId: activePlan._id,
     planName: activePlan.name,
+    scheduleMode: resolved.mode,
+    variantKey: resolved.variantKey,
+    variantLabel: resolved.variantLabel,
     date: todayStr,
     dayOfWeek,
-    meals: daySchedule ? daySchedule.meals : [],
+    meals: resolved.meals,
   });
 });
 
