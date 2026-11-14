@@ -18,5 +18,6 @@ router.use("/notifications", require("./notifications"));
 router.use("/feed", require("./feed"));
 router.use("/push", require("./push"));
 router.use("/recap", require("./recap"));
+router.use("/moments", require("./moments"));
 
 module.exports = router;

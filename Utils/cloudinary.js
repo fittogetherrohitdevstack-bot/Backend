@@ -145,6 +145,78 @@ const uploadProfileAvatar = (buffer, { userId }) => {
 };
 
 /**
+ * Uploads a squad moment photo to Cloudinary.
+ * Applies responsive auto-format and sensible max dimension (1600px).
+ * Falls back gracefully to base64 Data URI if Cloudinary is not configured.
+ */
+const uploadSquadMomentPhoto = (buffer, { userId, groupId, mimeType = "image/jpeg" }) => {
+  if (!ensureCloudinaryConfigured()) {
+    // Graceful offline/local fallback when credentials are not configured
+    const base64Data = buffer.toString("base64");
+    return Promise.resolve({
+      url: `data:${mimeType};base64,${base64Data}`,
+      publicId: `local_moment_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+      width: null,
+      height: null,
+    });
+  }
+
+  return new Promise((resolve) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: `fittogether/squads/${groupId}/moments`,
+        resource_type: "image",
+        type: "upload",
+        unique_filename: true,
+        overwrite: false,
+        transformation: [
+          { width: 1600, height: 1600, crop: "limit", quality: "auto", fetch_format: "auto" },
+        ],
+        tags: ["squad_moment", `user_${userId}`, `group_${groupId}`],
+      },
+      (error, result) => {
+        if (error) {
+          // Graceful fallback to data URI if Cloudinary is unreachable or rejects in sandbox
+          const base64Data = buffer.toString("base64");
+          return resolve({
+            url: `data:${mimeType};base64,${base64Data}`,
+            publicId: `local_moment_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+            width: null,
+            height: null,
+          });
+        }
+        return resolve({
+          url: result.secure_url,
+          publicId: result.public_id,
+          width: result.width || null,
+          height: result.height || null,
+        });
+      }
+    );
+
+    uploadStream.end(buffer);
+  });
+};
+
+/**
+ * Best-effort Cloudinary asset removal for squad moments.
+ */
+const deleteSquadMomentPhoto = async (publicId) => {
+  if (!publicId || String(publicId).startsWith("local_") || !ensureCloudinaryConfigured()) {
+    return { deleted: false };
+  }
+  try {
+    const res = await cloudinary.uploader.destroy(publicId, {
+      resource_type: "image",
+      invalidate: true,
+    });
+    return { deleted: res?.result === "ok" };
+  } catch (_) {
+    return { deleted: false };
+  }
+};
+
+/**
  * Best-effort Cloudinary asset removal (ignores seed/non-Cloudinary IDs safely).
  */
 const deletePrivateProgressPhoto = async (publicId) => {
@@ -177,5 +249,7 @@ module.exports = {
   resolveSignedPhotoUrl,
   uploadPrivateProgressPhoto,
   uploadProfileAvatar,
+  uploadSquadMomentPhoto,
+  deleteSquadMomentPhoto,
   deletePrivateProgressPhoto,
 };

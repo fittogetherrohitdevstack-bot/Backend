@@ -114,6 +114,9 @@ router.post(
   }),
   challengeController.selectWeeklyChallengeTemplate
 );
+
+// Squad Moments Feed & Social Interactions
+router.use("/:id/moments", require("./moments"));
 router.post("/:id/challenges", checkGroupMember(), challengeController.createChallenge);
 router.get("/:id/challenges", checkGroupMember(), challengeController.getGroupChallenges);
 
