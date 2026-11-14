@@ -7,14 +7,20 @@ const MealLog = require("../Modals/MealLog");
 const WorkoutSession = require("../Modals/WorkoutSession");
 const WaterLog = require("../Modals/WaterLog");
 const PointsLedger = require("../Modals/PointsLedger");
+const Badge = require("../Modals/Badge");
+const UserBadge = require("../Modals/UserBadge");
+const BodyMeasurement = require("../Modals/BodyMeasurement");
+const NudgeLog = require("../Modals/NudgeLog");
+const WeightLog = require("../Modals/WeightLog");
 const asyncHandler = require("../Utils/asyncHandler");
 const { sendSuccess, sendError } = require("../Utils/apiResponse");
-const { getLocalDateString } = require("../Utils/date");
+const { getLocalDateString, getISOWeekDetails } = require("../Utils/date");
 const { emitGroupActivity } = require("../Utils/socket");
 const { calculateChartTotals } = require("./mealController");
 const {
   recalculateGroupStreak,
   getSquadTodayMemberStatuses,
+  fetchUserLoggedDatesSet,
 } = require("../Utils/streakService");
 const { ensureWeeklyChallengeForGroup } = require("../Utils/challengeService");
 
@@ -225,7 +231,7 @@ const getGroupMembers = asyncHandler(async (req, res) => {
   const memberships = await Membership.find({
     groupId,
     status: "active",
-  }).populate("userId", "name email profileImage timezone createdAt");
+  }).populate("userId", "name email profileImage timezone currentStreak longestStreak createdAt");
 
   const userIds = memberships.map((m) => m.userId?._id).filter(Boolean);
   const profiles = await FitnessProfile.find({ userId: { $in: userIds } });
@@ -238,22 +244,26 @@ const getGroupMembers = asyncHandler(async (req, res) => {
 
     let safeProfile = null;
     if (profile) {
+      const isWeightPublic = profile.privacy?.weight === "group" || isSelf;
       safeProfile = {
         fitnessGoal: profile.fitnessGoal,
         activityLevel: profile.activityLevel,
         dietPreference: profile.dietPreference,
         targets: profile.targets,
         // Privacy checks: only expose if shared or if viewing own profile
-        weight: (profile.privacy.weight === "group" || isSelf) ? profile.currentWeight : null,
-        targetWeight: (profile.privacy.weight === "group" || isSelf) ? profile.targetWeight : null,
+        weight: isWeightPublic ? profile.currentWeight : null,
+        targetWeight: isWeightPublic ? profile.targetWeight : null,
+        isWeightPrivate: !isWeightPublic,
       };
     }
 
     return {
       userId: userObj._id,
       name: userObj.name,
-      email: userObj.email,
+      email: isSelf ? userObj.email : undefined,
       profileImage: userObj.profileImage,
+      currentStreak: userObj.currentStreak || 0,
+      longestStreak: userObj.longestStreak || 0,
       role: m.role,
       joinedAt: m.joinedAt,
       profile: safeProfile,
@@ -261,6 +271,248 @@ const getGroupMembers = asyncHandler(async (req, res) => {
   });
 
   return sendSuccess(res, { members });
+});
+
+// @desc Get detailed squad member profile with daily achievements, streaks, badges, points & privacy-gated personal metrics
+// @route GET /api/groups/:id/members/:userId/profile
+const getGroupMemberProfile = asyncHandler(async (req, res) => {
+  const groupId = req.group._id;
+  const targetUserId = req.params.userId;
+  const requesterId = req.user._id;
+
+  // 1. Verify target is an active member of this squad
+  const targetMembership = await Membership.findOne({
+    groupId,
+    userId: targetUserId,
+    status: "active",
+  }).lean();
+
+  if (!targetMembership) {
+    return sendError(res, "Member not found in this squad", 404);
+  }
+
+  // 2. Fetch target user details
+  const targetUser = await User.findById(targetUserId)
+    .select("name email profileImage timezone currentStreak longestStreak lastLogDate socialPrivacy createdAt")
+    .lean();
+
+  if (!targetUser) {
+    return sendError(res, "User not found", 404);
+  }
+
+  const isSelf = requesterId.toString() === targetUser._id.toString();
+
+  // 3. Fetch target user's fitness profile
+  const fitnessProfile = await FitnessProfile.findOne({ userId: targetUser._id }).lean();
+
+  // Privacy evaluations
+  const isWeightPublic =
+    isSelf ||
+    (fitnessProfile?.privacy?.weight === "group" && targetUser?.socialPrivacy?.showWeightInFeed !== false);
+
+  const isMeasurementsPublic =
+    isSelf || fitnessProfile?.privacy?.measurements === "group";
+
+  const isPhotosPublic =
+    isSelf || fitnessProfile?.privacy?.photos === "group";
+
+  // 4. Daily achievements & today's habit check-ins
+  const tz = targetUser.timezone || "Asia/Kolkata";
+  const localToday = getLocalDateString(new Date(), tz);
+  const { sourcesByDate } = await fetchUserLoggedDatesSet(targetUser._id, localToday, localToday);
+  const sources = sourcesByDate.get(localToday) || {
+    weight: false,
+    water: false,
+    meal: false,
+    workout: false,
+  };
+  const todayLogged = Boolean(
+    sources.weight || sources.water || sources.meal || sources.workout
+  );
+
+  // Water check-in detail
+  const waterLog = await WaterLog.findOne({ userId: targetUser._id, date: localToday }).lean();
+  const waterLoggedMl = (waterLog?.entries || []).reduce(
+    (acc, e) => acc + (Number(e.amountMl) || 0),
+    0
+  );
+  const waterTargetMl = fitnessProfile?.targets?.waterMl || 3000;
+  const waterCompleted = waterLoggedMl >= waterTargetMl;
+
+  // Meal check-in detail
+  const mealLog = await MealLog.findOne({ userId: targetUser._id, date: localToday }).lean();
+  const mealsList = mealLog?.meals || [];
+  const eatenMealsCount = mealsList.filter(
+    (m) => m.status === "eaten" || (m.plannedFoodItems || []).some((i) => i.eaten)
+  ).length;
+  const totalPlannedMeals = mealsList.length;
+  const mealsCompleted = totalPlannedMeals > 0 ? eatenMealsCount >= totalPlannedMeals : sources.meal;
+
+  // Workout check-in detail
+  const workoutSession = await WorkoutSession.findOne({
+    userId: targetUser._id,
+    date: localToday,
+  }).lean();
+  const workoutStatus = workoutSession ? workoutSession.status : "none";
+  const workoutName = workoutSession?.name || (workoutStatus === "rest" ? "Rest Day" : "");
+
+  // 5. Weekly consistency points & Squad Rank
+  const { weekStart, weekEnd } = getISOWeekDetails(localToday);
+  const activeMemberships = await Membership.find({ groupId, status: "active" })
+    .select("userId")
+    .lean();
+  const squadUserIds = activeMemberships.map((m) => m.userId);
+
+  const weeklyLedgers = await PointsLedger.aggregate([
+    {
+      $match: {
+        userId: { $in: squadUserIds },
+        date: { $gte: weekStart, $lte: weekEnd },
+      },
+    },
+    {
+      $group: {
+        _id: "$userId",
+        totalPoints: { $sum: "$points" },
+      },
+    },
+    { $sort: { totalPoints: -1 } },
+  ]);
+
+  const targetIdStr = targetUser._id.toString();
+  const rankIdx = weeklyLedgers.findIndex((l) => l._id.toString() === targetIdStr);
+  const weeklyRank = rankIdx !== -1 ? rankIdx + 1 : squadUserIds.length;
+  const weeklyPoints = rankIdx !== -1 ? weeklyLedgers[rankIdx].totalPoints : 0;
+
+  // 6. Badges earned
+  const userBadges = await UserBadge.find({ userId: targetUser._id })
+    .sort({ earnedAt: -1 })
+    .lean();
+  const badgeCodes = userBadges.map((ub) => ub.badgeCode);
+  const badgesCatalog = await Badge.find({ code: { $in: badgeCodes } }).lean();
+  const catalogMap = new Map(badgesCatalog.map((b) => [b.code, b]));
+
+  const badges = userBadges.map((ub) => {
+    const cat = catalogMap.get(ub.badgeCode);
+    return {
+      code: ub.badgeCode,
+      name: cat?.name || ub.badgeCode,
+      description: cat?.description || "Earned achievement badge",
+      icon: cat?.icon || "Award",
+      earnedAt: ub.earnedAt,
+    };
+  });
+
+  // 7. Personal details & metrics with strict privacy masking
+  let weightData = {
+    isPrivate: !isWeightPublic,
+  };
+  if (isWeightPublic) {
+    weightData = {
+      isPrivate: false,
+      currentWeight: fitnessProfile?.currentWeight ?? null,
+      targetWeight: fitnessProfile?.targetWeight ?? null,
+      hideWeightNumbers: Boolean(fitnessProfile?.hideWeightNumbers),
+    };
+  }
+
+  let measurementsData = {
+    isPrivate: !isMeasurementsPublic,
+  };
+  if (isMeasurementsPublic) {
+    const latestMeasurement = await BodyMeasurement.findOne({ userId: targetUser._id })
+      .sort({ date: -1 })
+      .lean();
+    measurementsData = {
+      isPrivate: false,
+      latestDate: latestMeasurement?.date || null,
+      measurementsCm: latestMeasurement?.measurementsCm || null,
+    };
+  }
+
+  // 8. Nudge eligibility check
+  const allowNudges = targetUser?.socialPrivacy?.allowNudges !== false;
+  let canNudge = false;
+  let nudgedByMeToday = false;
+  let nudgesReceivedToday = 0;
+
+  if (!isSelf) {
+    const [nudgedByViewerCount, receivedCount] = await Promise.all([
+      NudgeLog.countDocuments({
+        senderId: requesterId,
+        receiverId: targetUser._id,
+        dateKey: localToday,
+      }),
+      NudgeLog.countDocuments({
+        receiverId: targetUser._id,
+        dateKey: localToday,
+      }),
+    ]);
+    nudgedByMeToday = nudgedByViewerCount >= 1;
+    nudgesReceivedToday = receivedCount;
+    canNudge =
+      !todayLogged &&
+      allowNudges &&
+      nudgedByViewerCount < 1 &&
+      receivedCount < 3;
+  }
+
+  return sendSuccess(res, {
+    user: {
+      _id: targetUser._id,
+      name: targetUser.name,
+      email: isSelf ? targetUser.email : undefined,
+      profileImage: targetUser.profileImage || "",
+      currentStreak: targetUser.currentStreak || 0,
+      longestStreak: targetUser.longestStreak || 0,
+      lastLogDate: targetUser.lastLogDate || "",
+      role: targetMembership.role,
+      joinedAt: targetMembership.joinedAt || targetMembership.createdAt,
+      isSelf,
+    },
+    today: {
+      date: localToday,
+      loggedToday,
+      sources,
+      water: {
+        loggedMl: waterLoggedMl,
+        targetMl: waterTargetMl,
+        completed: waterCompleted,
+      },
+      meals: {
+        eatenCount: eatenMealsCount,
+        totalMeals: totalPlannedMeals,
+        completed: mealsCompleted,
+      },
+      workout: {
+        status: workoutStatus,
+        name: workoutName,
+        completed: workoutStatus === "completed" || workoutStatus === "rest",
+      },
+      weightLogged: sources.weight,
+    },
+    leaderboard: {
+      weeklyPoints,
+      weeklyRank,
+      totalSquadMembers: squadUserIds.length,
+    },
+    badges,
+    personalDetails: {
+      fitnessGoal: fitnessProfile?.fitnessGoal || "maintenance",
+      activityLevel: fitnessProfile?.activityLevel || "moderate",
+      dietPreference: fitnessProfile?.dietPreference || "non_vegetarian",
+      height: fitnessProfile?.height || null,
+      targets: fitnessProfile?.targets || null,
+      weight: weightData,
+      measurements: measurementsData,
+    },
+    nudge: {
+      canNudge,
+      nudgedByMeToday,
+      nudgesReceivedToday,
+      allowNudges,
+    },
+  });
 });
 
 // @desc Regenerate invite code (Admin only)
@@ -517,6 +769,7 @@ module.exports = {
   getGroupById,
   updateGroup,
   getGroupMembers,
+  getGroupMemberProfile,
   regenerateInviteCode,
   leaveGroup,
   removeMember,

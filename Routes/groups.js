@@ -67,6 +67,7 @@ router.put(
   groupController.updateGroup
 );
 router.get("/:id/members", checkGroupMember(), groupController.getGroupMembers);
+router.get("/:id/members/:userId/profile", checkGroupMember(), groupController.getGroupMemberProfile);
 router.post(
   "/:id/invite/regenerate",
   checkGroupMember({ requireAdmin: true }),
