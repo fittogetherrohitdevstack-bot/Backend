@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const mongoose = require("mongoose");
+const groupController = require("../Controllers/groupController");
 
 // Pure privacy evaluation logic verification
 test("Member Profile Privacy: Masks weight and measurements when set to private", () => {
@@ -93,4 +94,8 @@ test("Member Profile Daily Achievements: computes completion status correctly", 
   assert.equal(todayLogged, true);
   assert.equal(waterCompleted, true);
   assert.equal(mealsCompleted, true);
+});
+
+test("Member Profile Controller: getGroupMemberProfile handler is exported and defined", () => {
+  assert.equal(typeof groupController.getGroupMemberProfile, "function");
 });

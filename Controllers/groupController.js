@@ -472,7 +472,7 @@ const getGroupMemberProfile = asyncHandler(async (req, res) => {
     },
     today: {
       date: localToday,
-      loggedToday,
+      loggedToday: todayLogged,
       sources,
       water: {
         loggedMl: waterLoggedMl,
