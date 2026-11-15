@@ -6,6 +6,7 @@ const protect = require("../Middleware/auth");
 router.use(protect);
 
 router.post("/", waterController.addWater);
+router.put("/target", waterController.updateWaterTarget);
 router.get("/today", waterController.getTodayWater);
 router.get("/history", waterController.getWaterHistory);
 router.delete("/entries/:entryId", waterController.deleteWaterEntry);

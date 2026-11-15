@@ -202,9 +202,49 @@ const deleteWaterEntry = asyncHandler(async (req, res) => {
   }, "Water entry removed");
 });
 
+// @desc Update user's daily hydration target
+// @route PUT /api/water/target
+const updateWaterTarget = asyncHandler(async (req, res) => {
+  const { targetMl } = req.body;
+  const target = Number(targetMl);
+
+  if (!target || target < 500 || target > 10000) {
+    return sendError(res, "Target must be between 500 ml and 10,000 ml", 400);
+  }
+
+  const todayStr = getLocalDateString(new Date(), req.user.timezone);
+
+  // Update FitnessProfile
+  await FitnessProfile.findOneAndUpdate(
+    { userId: req.user._id },
+    { $set: { "targets.waterMl": target } },
+    { upsert: true, returnDocument: "after" }
+  );
+
+  // Update today's WaterLog if exists
+  let waterLog = await WaterLog.findOne({ userId: req.user._id, date: todayStr });
+  let totalConsumed = 0;
+  if (waterLog) {
+    waterLog.targetMl = target;
+    await waterLog.save();
+    totalConsumed = waterLog.entries.reduce((sum, e) => sum + e.amountMl, 0);
+  }
+
+  await syncWaterGamification({
+    user: req.user,
+    dateStr: todayStr,
+    totalConsumed,
+    targetMl: target,
+    notifyGoalHit: totalConsumed >= target,
+  });
+
+  return sendSuccess(res, { targetMl: target }, "Daily hydration target updated");
+});
+
 module.exports = {
   addWater,
   getTodayWater,
   getWaterHistory,
   deleteWaterEntry,
+  updateWaterTarget,
 };
