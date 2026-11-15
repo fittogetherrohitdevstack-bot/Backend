@@ -8,7 +8,11 @@ const WaterLog = require("../Modals/WaterLog");
 const asyncHandler = require("../Utils/asyncHandler");
 const { sendSuccess, sendError } = require("../Utils/apiResponse");
 const { getLocalDateString } = require("../Utils/date");
-const { POINTS_RULES, syncDailyHabitPoints } = require("../Utils/gamification");
+const {
+  POINTS_RULES,
+  syncDailyHabitPoints,
+  calculateWaterPoints,
+} = require("../Utils/gamification");
 const { calculateTDEE } = require("../Utils/nutrition");
 const { emitGroupActivity } = require("../Utils/socket");
 const { useStreakFreeze, recalculateUserStreak } = require("../Utils/streakService");
@@ -354,11 +358,12 @@ const updateProfile = asyncHandler(async (req, res) => {
         (sum, entry) => sum + (entry.amountMl || 0),
         0
       );
+      const waterPoints = calculateWaterPoints(totalConsumed, todayWaterLog.targetMl);
       await syncDailyHabitPoints({
         userId: req.user._id,
         date: todayStr,
         type: "water",
-        points: totalConsumed >= todayWaterLog.targetMl ? POINTS_RULES.WATER_GOAL_REACHED : 0,
+        points: waterPoints,
         meta: { totalConsumed, targetMl: todayWaterLog.targetMl },
         eventName: "squad-sync",
       });

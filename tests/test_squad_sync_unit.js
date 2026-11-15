@@ -183,7 +183,7 @@ test("Water deletion removes stale water PointsLedger entry when below profile t
       date: todayStr,
       targetMl: 2500,
       entries: [
-        { _id: { toString: () => "e1" }, amountMl: 1500 },
+        { _id: { toString: () => "e1" }, amountMl: 0 },
         { _id: { toString: () => "e2" }, amountMl: 1000 },
       ],
       async save() {
@@ -204,9 +204,9 @@ test("Water deletion removes stale water PointsLedger entry when below profile t
       user: { _id: userId, name: "A", timezone: tz },
     });
 
-    assert.strictEqual(res.body.data.totalConsumed, 1500);
+    assert.strictEqual(res.body.data.totalConsumed, 0);
     assert.strictEqual(res.body.data.targetMl, 2500);
-    assert.strictEqual(res.body.data.percent, 60);
+    assert.strictEqual(res.body.data.percent, 0);
     assert.deepStrictEqual(deletedFilter, { userId, date: todayStr, type: "water" });
   } finally {
     FitnessProfile.findOne = origProfileFindOne;

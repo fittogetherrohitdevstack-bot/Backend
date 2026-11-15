@@ -14,6 +14,14 @@ const calculateMealPoints = (eatenCount, totalPlanned) => {
   return Math.min(40, eatenCount * ptsPerMeal);
 };
 
+const calculateWaterPoints = (consumedMl, targetMl = 3000) => {
+  if (!consumedMl || consumedMl <= 0) return 0;
+  const target = targetMl > 0 ? targetMl : 3000;
+  const maxPts = POINTS_RULES.WATER_GOAL_REACHED || 15;
+  const proportional = Math.round((consumedMl / target) * maxPts);
+  return Math.min(maxPts, Math.max(1, proportional));
+};
+
 const POINTS_RULES = {
   WORKOUT_COMPLETED: 30,
   REST_DAY_HONORED: 30,
@@ -25,6 +33,9 @@ const POINTS_RULES = {
   CHALLENGE_DEFAULT: 100,
   STREAK_BONUS_PER_DAY: 5,
   STREAK_BONUS_CAP: 50,
+  PENALTY_MISSED_MEALS: -15,
+  PENALTY_MISSED_WATER: -10,
+  PENALTY_MISSED_WORKOUT: -15,
 };
 
 const SEEDED_BADGES = [
@@ -134,6 +145,15 @@ const syncDailyHabitPoints = async ({
       },
       { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
     );
+
+    // Auto-revoke corresponding penalty for this date once habit is logged
+    if (type === "meals") {
+      await PointsLedger.deleteOne({ userId, date, type: "penalty_meals" }).catch(() => {});
+    } else if (type === "water") {
+      await PointsLedger.deleteOne({ userId, date, type: "penalty_water" }).catch(() => {});
+    } else if (type === "workout") {
+      await PointsLedger.deleteOne({ userId, date, type: "penalty_workout" }).catch(() => {});
+    }
   } else {
     await PointsLedger.deleteOne({ userId, date, type });
   }
@@ -149,6 +169,7 @@ const syncDailyHabitPoints = async ({
 
 module.exports = {
   calculateMealPoints,
+  calculateWaterPoints,
   POINTS_RULES,
   SEEDED_BADGES,
   syncDailyHabitPoints,

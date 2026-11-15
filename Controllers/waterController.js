@@ -3,7 +3,12 @@ const FitnessProfile = require("../Modals/FitnessProfile");
 const asyncHandler = require("../Utils/asyncHandler");
 const { sendSuccess, sendError } = require("../Utils/apiResponse");
 const { getLocalDateString } = require("../Utils/date");
-const { POINTS_RULES, syncDailyHabitPoints } = require("../Utils/gamification");
+const {
+  POINTS_RULES,
+  syncDailyHabitPoints,
+  calculateWaterPoints,
+} = require("../Utils/gamification");
+const { clearHabitPenalty } = require("../Utils/penaltyService");
 const { recalculateUserStreak } = require("../Utils/streakService");
 const { emitSquadFeedEvent } = require("../Utils/feedService");
 
@@ -17,6 +22,7 @@ const syncWaterGamification = async ({
   const timezone = user.timezone || "Asia/Kolkata";
   const isTodayDate = dateStr === getLocalDateString(new Date(), timezone);
   const goalHit = totalConsumed >= targetMl;
+  const waterPoints = calculateWaterPoints(totalConsumed, targetMl);
 
   let eventName = null;
   if (isTodayDate) {
@@ -27,8 +33,8 @@ const syncWaterGamification = async ({
     userId: user._id,
     date: dateStr,
     type: "water",
-    points: goalHit ? POINTS_RULES.WATER_GOAL_REACHED : 0,
-    meta: { totalConsumed, targetMl },
+    points: waterPoints,
+    meta: { totalConsumed, targetMl, goalHit },
     eventName,
     eventPayload: isTodayDate
       ? {
@@ -36,6 +42,7 @@ const syncWaterGamification = async ({
           userName: user.name,
           totalConsumed,
           targetMl,
+          waterPoints,
         }
       : null,
   });

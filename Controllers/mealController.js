@@ -23,6 +23,8 @@ const {
   resolvePlanMealsForDate,
   buildMealSnapshotFromPlan,
 } = require("../Utils/dietSchedule");
+const { parseMealWithAI, inferMealSlot } = require("../Utils/aiNutritionService");
+const { clearHabitPenalty } = require("../Utils/penaltyService");
 
 /**
  * Keeps squad meal points (`PointsLedger`) and real-time socket feed synced
@@ -1112,6 +1114,167 @@ const getMyDashboardSummary = asyncHandler(async (req, res) => {
   });
 });
 
+// @desc Live AI nutrition estimation from text
+// @route POST /api/meals/ai-estimate
+const aiEstimateMeal = asyncHandler(async (req, res) => {
+  const { text, mealName } = req.body;
+  if (!text || !text.trim()) {
+    return sendError(res, "Please provide what you ate", 400);
+  }
+
+  const result = await parseMealWithAI(text, mealName);
+  return sendSuccess(res, result);
+});
+
+// @desc Quick log meal with AI
+// @route POST /api/meals/ai-quick-log
+const aiQuickLogMeal = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const timezone = req.user.timezone || "Asia/Kolkata";
+  const { text, mealName, date, items } = req.body;
+
+  if ((!text || !text.trim()) && (!items || items.length === 0)) {
+    return sendError(res, "Please provide food details or items", 400);
+  }
+
+  const dateStr = date || getLocalDateString(new Date(), timezone);
+
+  // If items not provided directly, parse via AI
+  let parsed = null;
+  let foodItemsToLog = items;
+  let targetMealName = mealName;
+
+  if (!foodItemsToLog || foodItemsToLog.length === 0) {
+    parsed = await parseMealWithAI(text, mealName);
+    foodItemsToLog = parsed.items || [];
+    if (!targetMealName) targetMealName = parsed.mealSlot || "Breakfast";
+  } else if (!targetMealName) {
+    targetMealName = inferMealSlot(text || "") || "Breakfast";
+  }
+
+  if (!foodItemsToLog.length) {
+    return sendError(res, "Could not identify any food items. Please be more specific (e.g. 2 eggs, 1 cup rice).", 400);
+  }
+
+  // 1. Locate or create daily MealLog
+  let mealLog = await MealLog.findOne({ userId, date: dateStr });
+  if (!mealLog) {
+    const activePlan = await DietPlan.findOne({
+      userId,
+      isActive: true,
+      startDate: { $lte: dateStr },
+      endDate: { $gte: dateStr },
+    });
+    const planResolved = activePlan ? resolvePlanMealsForDate(activePlan, dateStr) : null;
+
+    if (activePlan && planResolved && planResolved.meals?.length > 0) {
+      mealLog = await MealLog.create({
+        userId,
+        groupId: activePlan.groupId,
+        dietPlanId: activePlan._id,
+        date: dateStr,
+        meals: buildMealSnapshotFromPlan(planResolved.meals),
+      });
+    } else {
+      mealLog = await MealLog.create({
+        userId,
+        date: dateStr,
+        meals: [
+          {
+            mealId: crypto.randomUUID(),
+            mealName: "Breakfast",
+            scheduledTime: "08:00",
+            plannedFoodItems: [],
+            status: "pending",
+          },
+          {
+            mealId: crypto.randomUUID(),
+            mealName: "Lunch",
+            scheduledTime: "13:00",
+            plannedFoodItems: [],
+            status: "pending",
+          },
+          {
+            mealId: crypto.randomUUID(),
+            mealName: "Dinner",
+            scheduledTime: "20:00",
+            plannedFoodItems: [],
+            status: "pending",
+          },
+        ],
+      });
+    }
+  }
+
+  // 2. Find matching meal or create slot
+  let targetMeal = mealLog.meals.find(
+    (m) => m.mealName.toLowerCase() === targetMealName.toLowerCase()
+  );
+
+  if (!targetMeal) {
+    targetMeal = {
+      mealId: crypto.randomUUID(),
+      mealName: targetMealName,
+      scheduledTime: "12:00",
+      plannedFoodItems: [],
+      status: "pending",
+    };
+    mealLog.meals.push(targetMeal);
+    targetMeal = mealLog.meals[mealLog.meals.length - 1];
+  }
+
+  // 3. Append parsed food items with eaten=true
+  const addedItems = [];
+  for (const it of foodItemsToLog) {
+    const itemObj = {
+      itemId: crypto.randomUUID(),
+      name: it.name,
+      quantity: Number(it.quantity) || 1,
+      unit: it.unit || "g",
+      calories: Number(it.calories) || 0,
+      protein: Number(it.protein) || 0,
+      carbs: Number(it.carbs) || 0,
+      fats: Number(it.fats) || 0,
+      eaten: true,
+      eatenAt: new Date(),
+      actualQuantity: Number(it.quantity) || 1,
+      isUnplanned: true,
+    };
+    targetMeal.plannedFoodItems.push(itemObj);
+    addedItems.push(itemObj);
+  }
+
+  // Mark meal as eaten
+  targetMeal.status = "eaten";
+  targetMeal.completedAt = new Date();
+
+  await mealLog.save();
+
+  // 4. Synchronize gamification & clear penalties
+  await syncMealGamificationAndNotify({
+    userId,
+    userName: req.user.name,
+    dateStr,
+    timezone,
+    mealLog,
+    mealName: targetMeal.mealName,
+    status: "eaten",
+    notifyFeed: true,
+  });
+
+  await clearHabitPenalty(userId, dateStr, "meals");
+
+  const totals = calculateChartTotals(mealLog.meals);
+
+  return sendSuccess(res, {
+    message: `Logged ${addedItems.length} item(s) to ${targetMeal.mealName}! 🥗`,
+    mealName: targetMeal.mealName,
+    mealLog,
+    addedItems,
+    totals,
+  });
+});
+
 module.exports = {
   calculateChartTotals,
   getDayChart,
@@ -1125,4 +1288,6 @@ module.exports = {
   updateMealStatus,
   getMealHistory,
   getMyDashboardSummary,
+  aiEstimateMeal,
+  aiQuickLogMeal,
 };

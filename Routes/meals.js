@@ -14,6 +14,10 @@ router.post("/day/items", mealController.addUnplannedItem);
 router.post("/day/copy", mealController.copyDayChart);
 router.get("/summary", mealController.getMealsSummary);
 
+// AI Natural Language Meal Logging
+router.post("/ai-estimate", mealController.aiEstimateMeal);
+router.post("/ai-quick-log", mealController.aiQuickLogMeal);
+
 // Legacy and backwards-compatible routes
 router.post("/log", mealController.getOrCreateDailyMealLog);
 router.patch("/log/:id", mealController.updateMealStatus);

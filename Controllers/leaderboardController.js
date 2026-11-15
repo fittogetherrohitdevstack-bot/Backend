@@ -8,6 +8,7 @@ const {
   getISOWeekDetails,
   addDaysToDateString,
 } = require("../Utils/date");
+const { syncSquadWeeklyPenalties } = require("../Utils/penaltyService");
 
 // @desc Get group leaderboard (ranked strictly by consistency & XP points, never weight lost)
 // @route GET /api/groups/:id/leaderboard
@@ -51,13 +52,20 @@ const getGroupLeaderboard = asyncHandler(async (req, res) => {
         workoutPoints: 0,
         waterPoints: 0,
         bonusPoints: 0,
+        penaltyPoints: 0,
         loggedDays: 0,
       });
     }
   });
 
-  // Aggregate daily consistency points for active members across all their squads
   const memberIds = memberships.map((m) => m.userId?._id).filter(Boolean);
+
+  // Sync penalties for past completed days of the week if viewing weekly leaderboard
+  if (period === "week" && memberIds.length > 0) {
+    await syncSquadWeeklyPenalties(memberIds, currentWeek.weekStart, todayStr).catch(() => {});
+  }
+
+  // Aggregate daily consistency points for active members across all their squads
   const ledgerEntries = await PointsLedger.find({
     userId: { $in: memberIds },
     ...dateFilter,
@@ -73,10 +81,13 @@ const getGroupLeaderboard = asyncHandler(async (req, res) => {
       if (entry.type === "meals") stats.mealPoints += entry.points;
       else if (entry.type === "workout") stats.workoutPoints += entry.points;
       else if (entry.type === "water") stats.waterPoints += entry.points;
+      else if (entry.type && entry.type.startsWith("penalty")) stats.penaltyPoints += entry.points;
       else stats.bonusPoints += entry.points;
 
-      if (!memberDays.has(uId)) memberDays.set(uId, new Set());
-      memberDays.get(uId).add(entry.date);
+      if (entry.points > 0 && !entry.type.startsWith("penalty")) {
+        if (!memberDays.has(uId)) memberDays.set(uId, new Set());
+        memberDays.get(uId).add(entry.date);
+      }
     }
   });
 
@@ -112,6 +123,7 @@ const getGroupLeaderboard = asyncHandler(async (req, res) => {
     const consistencyPercent = Math.min(100, Math.round((daysLogged / daysInPeriod) * 100));
     return {
       ...m,
+      totalPoints: Math.max(0, m.totalPoints), // Total points floored at 0 so penalties don't result in negative display
       loggedDays: daysLogged,
       consistencyPercent,
     };
