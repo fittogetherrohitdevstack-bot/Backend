@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const connectToDb = require("../Config/db");
 const config = require("../Config/env");
 const User = require("../Modals/User");
 const WeightLog = require("../Modals/WeightLog");
@@ -22,8 +23,16 @@ const callController = (fn, req) => {
 
 const runTests = async () => {
   try {
-    await mongoose.connect(config.MONGODB_URI);
-    const user = await User.findOne({ email: "alex@fittogether.test" });
+    await connectToDb();
+    let user = await User.findOne({ email: "alex@fittogether.test" });
+    if (!user) {
+      user = await User.create({
+        name: "Alex",
+        email: "alex@fittogether.test",
+        password: "Password123!",
+        timezone: "Asia/Kolkata",
+      });
+    }
 
     console.log("🧪 Running Weight API Tests...");
 

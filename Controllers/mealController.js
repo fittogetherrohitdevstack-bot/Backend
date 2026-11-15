@@ -882,14 +882,24 @@ const getMealsSummary = asyncHandler(async (req, res) => {
 const getOrCreateDailyMealLog = getDayChart;
 
 const updateMealStatus = asyncHandler(async (req, res) => {
-  const { mealId, status, actualFoodItems, skipReason } = req.body;
+  const { mealId, status, actualFoodItems, skipReason, date } = req.body;
   const timezone = req.user.timezone || "Asia/Kolkata";
-  const dateStr = getLocalDateString(new Date(), timezone);
+  let dateStr = date || getLocalDateString(new Date(), timezone);
 
-  return updateChartMeal({
-    ...req,
-    body: { date: dateStr, mealId, status, skipReason },
-  }, res);
+  if (req.params.id) {
+    const existing = await MealLog.findById(req.params.id);
+    if (existing) {
+      dateStr = existing.date;
+    }
+  }
+
+  return updateChartMeal(
+    {
+      ...req,
+      body: { date: dateStr, mealId, status, skipReason },
+    },
+    res
+  );
 });
 
 const getMealHistory = asyncHandler(async (req, res) => {
