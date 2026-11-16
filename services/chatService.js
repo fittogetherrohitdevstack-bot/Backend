@@ -24,6 +24,16 @@ const validateSquadMembership = async (groupId, userId) => {
   }).lean();
 
   if (!membership) {
+    // Check if user is group creator/owner (auto-heal membership if missing)
+    const group = await Group.findOne({ _id: groupId, createdBy: userId }).lean();
+    if (group) {
+      await Membership.findOneAndUpdate(
+        { groupId, userId },
+        { $setOnInsert: { groupId, userId, role: "admin", status: "active" } },
+        { upsert: true }
+      );
+      return { isMember: true, role: "admin", membership: { role: "admin", status: "active" } };
+    }
     return { isMember: false };
   }
 
@@ -126,7 +136,7 @@ const getSquadMessages = async ({ groupId, userId, before = null, limit = 30 }) 
 /**
  * Send a new Squad Chat message
  */
-const sendMessage = async ({ groupId, userId, text, replyToId = null, messageType = "text" }, socketEmitter = null) => {
+const sendMessage = async ({ groupId, userId, text, replyToId = null, messageType = "text", clientMsgId = null }, socketEmitter = null) => {
   const { isMember } = await validateSquadMembership(groupId, userId);
   if (!isMember) {
     throw new Error("UNAUTHORIZED_SQUAD_ACCESS");
@@ -169,6 +179,9 @@ const sendMessage = async ({ groupId, userId, text, replyToId = null, messageTyp
     .lean();
 
   const formatted = formatMessage(populated, userId);
+  if (clientMsgId) {
+    formatted.clientMsgId = clientMsgId;
+  }
 
   // Real-time broadcast via Socket.io
   if (socketEmitter) {

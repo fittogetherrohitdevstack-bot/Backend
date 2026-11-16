@@ -22,6 +22,27 @@ const getUserSquads = asyncHandler(async (req, res) => {
     .lean();
 
   const validMemberships = memberships.filter((m) => m.groupId && m.groupId.isActive !== false);
+  const existingGroupIds = new Set(validMemberships.map((m) => String(m.groupId._id)));
+
+  // Include groups created by this user that might be missing membership records
+  const createdGroups = await Group.find({
+    createdBy: userId,
+    isActive: true,
+    _id: { $nin: Array.from(existingGroupIds) },
+  }).lean();
+
+  for (const cg of createdGroups) {
+    await Membership.findOneAndUpdate(
+      { groupId: cg._id, userId },
+      { $setOnInsert: { groupId: cg._id, userId, role: "admin", status: "active" } },
+      { upsert: true }
+    );
+    validMemberships.push({
+      groupId: cg,
+      role: "admin",
+      status: "active",
+    });
+  }
 
   const squadList = await Promise.all(
     validMemberships.map(async (m) => {
@@ -110,7 +131,7 @@ const getMessages = asyncHandler(async (req, res) => {
 // @route POST /api/chat/squads/:squadId/messages
 const sendMessage = asyncHandler(async (req, res) => {
   const { squadId } = req.params;
-  const { text, replyToId, messageType } = req.body;
+  const { text, replyToId, messageType, clientMsgId } = req.body;
 
   try {
     const result = await chatService.sendMessage(
@@ -120,6 +141,7 @@ const sendMessage = asyncHandler(async (req, res) => {
         text,
         replyToId,
         messageType,
+        clientMsgId,
       },
       socketEmitter
     );
