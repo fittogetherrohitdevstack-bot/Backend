@@ -64,6 +64,18 @@ const createAndDispatchNotification = async ({
 }) => {
   if (!recipientUserId || !title || !body) return null;
 
+  console.log("[NotificationService Dispatch]", {
+    eventType: type,
+    category,
+    recipientUserId: recipientUserId.toString(),
+    senderId: senderId ? senderId.toString() : null,
+    senderName,
+    finalTitle: title,
+    finalBody: body,
+    url,
+    activityId,
+  });
+
   // 1. Create In-App Notification Record (separate from push delivery)
   const notificationDoc = await Notification.create({
     userId: recipientUserId,
@@ -220,6 +232,15 @@ const dispatchSocialActivityNotification = async ({
   const recipientUserIds = [
     ...new Set(peerMemberships.map((m) => m.userId.toString())),
   ];
+
+  console.log("[SocialActivityDispatch Found Squadmates]", {
+    actorId: actorId.toString(),
+    actorName: resolvedActorName,
+    type,
+    title,
+    squadmatesCount: recipientUserIds.length,
+    recipientUserIds,
+  });
 
   if (!recipientUserIds.length) return [];
 

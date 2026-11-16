@@ -157,6 +157,15 @@ const sendNativePushToUser = async (
     },
   };
 
+  console.log("[Firebase NativePush Dispatch]", {
+    userId: userId.toString(),
+    tokensCount: tokens.length,
+    finalTitle: title,
+    finalBody: body,
+    notificationPayload: message.notification,
+    androidChannel: message.android.notification.channelId,
+  });
+
   try {
     const response = await admin.messaging().sendEachForMulticast(message);
     let sent = 0;

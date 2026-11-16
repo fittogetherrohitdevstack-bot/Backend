@@ -59,12 +59,28 @@ const unsubscribePush = asyncHandler(async (req, res) => {
 // @desc Send test push notification to current user's subscribed devices
 // @route POST /api/push/test
 const sendTestPush = asyncHandler(async (req, res) => {
+  const customTitle = req.body?.title;
+  const customBody = req.body?.body;
+
+  const title = customTitle || "FitTogether Push Ready 🔥";
+  const body = customBody || "Squad nudges, streak reminders, and Sunday recaps are connected!";
+  const url = req.body?.url || "/";
+  const type = req.body?.type || "general";
+  const tag = req.body?.tag || "fittogether-test";
+
+  console.log("[PushController] /api/push/test initiated for user:", req.user._id, {
+    title,
+    body,
+    url,
+  });
+
   const result = await sendPushToUser(req.user._id, {
-    title: "FitTogether Push Ready 🔥",
-    body: "Squad nudges, streak reminders, and Sunday recaps are connected!",
-    url: "/",
-    type: "general",
-    tag: "fittogether-test",
+    title,
+    body,
+    url,
+    type,
+    tag,
+    data: req.body?.data || {},
   });
 
   if (result.skipped === "vapid_not_configured") {
@@ -78,7 +94,7 @@ const sendTestPush = asyncHandler(async (req, res) => {
     return sendError(res, "No push-enabled browser/device subscribed for this account yet.", 400);
   }
 
-  return sendSuccess(res, result, "Test push notification sent");
+  return sendSuccess(res, result, "Test push notification sent successfully");
 });
 
 module.exports = {
