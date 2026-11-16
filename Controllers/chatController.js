@@ -17,7 +17,7 @@ const socketEmitter = (groupId, eventName, payload) => {
 const getUserSquads = asyncHandler(async (req, res) => {
   const userId = req.user._id;
 
-  const memberships = await Membership.find({ userId, status: "active" })
+  const memberships = await Membership.find({ userId, status: { $ne: "left" } })
     .populate("groupId")
     .lean();
 

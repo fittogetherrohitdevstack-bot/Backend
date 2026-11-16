@@ -20,7 +20,7 @@ const validateSquadMembership = async (groupId, userId) => {
   const membership = await Membership.findOne({
     groupId,
     userId,
-    status: "active",
+    status: { $ne: "left" },
   }).lean();
 
   if (!membership) {
