@@ -104,7 +104,7 @@ const createAndDispatchNotification = async ({
     return { notification: notificationDoc, push: { skipped: true } };
   }
 
-  // 3. Check push preferences
+  // 3. Check push preferences (NotificationPreference is the primary authority)
   const pref = await getUserPreferences(recipientUserId);
   const allowed = isNotificationCategoryAllowed(pref, category, type);
 
@@ -112,9 +112,14 @@ const createAndDispatchNotification = async ({
     return { notification: notificationDoc, push: { skipped: "disabled_by_preferences" } };
   }
 
-  // Check legacy reminderSettings if push channel is toggled off
-  const reminderSetting = await ReminderSetting.findOne({ userId: recipientUserId }).lean();
-  if (reminderSetting?.channels?.push === false) {
+  // If user has push enabled in preferences, ensure legacy reminderSetting channels.push is synchronized
+  if (pref.allPushEnabled !== false) {
+    ReminderSetting.updateOne(
+      { userId: recipientUserId, "channels.push": false },
+      { $set: { "channels.push": true } }
+    ).catch(() => {});
+  } else {
+    // Both explicitly disabled
     return { notification: notificationDoc, push: { skipped: "push_channel_disabled" } };
   }
 
