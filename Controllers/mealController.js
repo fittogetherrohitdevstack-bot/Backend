@@ -23,6 +23,7 @@ const {
   resolvePlanMealsForDate,
   buildMealSnapshotFromPlan,
 } = require("../Utils/dietSchedule");
+const { dispatchSocialActivityNotification } = require("../services/notificationService");
 const { parseMealWithAI, inferMealSlot } = require("../Utils/aiNutritionService");
 const { clearHabitPenalty } = require("../Utils/penaltyService");
 
@@ -86,6 +87,30 @@ const syncMealGamificationAndNotify = async ({
           dateKey: dateStr,
           dedupeKey: `diet_completed_${userId}_${dateStr}`,
           meta: { totalMeals },
+        }).catch(() => {});
+
+        dispatchSocialActivityNotification({
+          actorId: userId,
+          actorName: userName || "",
+          type: "diet_updated",
+          category: "diet",
+          title: `🥗 ${userName} completed today's diet chart!`,
+          body: `All meals finished (${eatenMeals}/${totalMeals}). Great dedication!`,
+          url: "/tracker",
+          activityId: `diet_${userId}_${dateStr}`,
+          data: { totalMeals, eatenMeals },
+        }).catch(() => {});
+      } else if (status === "eaten") {
+        dispatchSocialActivityNotification({
+          actorId: userId,
+          actorName: userName || "",
+          type: "meal_added",
+          category: "meal",
+          title: `🍎 ${userName} added a new meal`,
+          body: `${userName} just logged ${mealName || "a meal"}. Check out what they're eating!`,
+          url: "/tracker",
+          activityId: `meal_${userId}_${dateStr}_${Date.now()}`,
+          data: { mealName, eatenMeals, totalMeals },
         }).catch(() => {});
       }
     } catch (_) {

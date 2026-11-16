@@ -6,6 +6,7 @@ const { sendSuccess, sendError } = require("../Utils/apiResponse");
 const { getLocalDateString, getDayOfWeek } = require("../Utils/date");
 const { POINTS_RULES, syncDailyHabitPoints } = require("../Utils/gamification");
 const { recalculateUserStreak } = require("../Utils/streakService");
+const { dispatchSocialActivityNotification } = require("../services/notificationService");
 
 const syncWorkoutPointsAndNotify = async (user, sessionDate, session) => {
   const isCompletedOrRest =
@@ -42,6 +43,21 @@ const syncWorkoutPointsAndNotify = async (user, sessionDate, session) => {
   });
 
   await recalculateUserStreak(user._id).catch(() => {});
+
+  if (session.status === "completed") {
+    dispatchSocialActivityNotification({
+      actorId: user._id,
+      actorName: user.name,
+      actorImage: user.profileImage || "",
+      type: "workout_completed",
+      category: "workout",
+      title: `💪 ${user.name} completed ${session.workoutName || "their workout"}`,
+      body: `Check out their latest workout session! Keep the squad streak burning.`,
+      url: "/workouts",
+      activityId: session._id ? session._id.toString() : "",
+      data: { workoutName: session.workoutName, status: session.status },
+    }).catch(() => {});
+  }
 };
 
 // @desc Create workout plan

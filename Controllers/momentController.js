@@ -10,6 +10,10 @@ const {
   deleteSquadMomentPhoto,
 } = require("../Utils/cloudinary");
 const { emitGroupActivity } = require("../Utils/socket");
+const {
+  dispatchSocialActivityNotification,
+  cleanupActivityNotifications,
+} = require("../services/notificationService");
 
 /**
  * Serializes a moment with user-specific reaction and breakdown summary.
@@ -193,6 +197,21 @@ const createMoment = asyncHandler(async (req, res) => {
     category: selectedCategory,
   });
 
+  // Dispatch social notification to squadmates
+  dispatchSocialActivityNotification({
+    actorId: req.user._id,
+    actorName: req.user.name,
+    actorImage: req.user.profileImage || "",
+    type: "moment_posted",
+    category: "moment",
+    title: `📸 ${req.user.name} shared a new moment`,
+    body: populated.caption ? `"${populated.caption}"` : "See what they are up to in the squad feed!",
+    image: uploadedImages[0]?.url || "",
+    url: `/moments`,
+    activityId: moment._id.toString(),
+    groupId,
+  }).catch((err) => console.warn("[Notification] Moment notify error:", err.message));
+
   return sendSuccess(res, { moment: serialized }, "Moment shared with your squad! 🔥", 201);
 });
 
@@ -268,6 +287,7 @@ const deleteMoment = asyncHandler(async (req, res) => {
   }
 
   await SquadMoment.findByIdAndDelete(moment._id);
+  cleanupActivityNotifications(moment._id.toString()).catch(() => {});
 
   emitGroupActivity(groupId.toString(), "squad-moment-deleted", {
     momentId: moment._id,

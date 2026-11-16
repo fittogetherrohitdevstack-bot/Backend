@@ -6,17 +6,42 @@ const notificationSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+      index: true,
+    },
+    senderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
+    senderName: {
+      type: String,
+      default: "",
+    },
+    senderImage: {
+      type: String,
+      default: "",
     },
     type: {
       type: String,
       enum: [
         "meal",
-        "workout",
+        "meal_added",
+        "diet",
+        "diet_updated",
         "water",
+        "water_logged",
+        "moment",
+        "moment_posted",
+        "workout",
+        "workout_completed",
         "streak",
         "badge",
+        "achievement_unlocked",
         "challenge",
         "group",
+        "friend_request",
+        "friend_request_accepted",
         "weight",
         "measurements",
         "photos",
@@ -24,8 +49,24 @@ const notificationSchema = new mongoose.Schema(
         "reminder",
         "nudge",
         "recap",
+        "general",
       ],
-      default: "group",
+      default: "general",
+    },
+    category: {
+      type: String,
+      enum: [
+        "meal",
+        "diet",
+        "water",
+        "moment",
+        "workout",
+        "achievement",
+        "social",
+        "reminder",
+        "general",
+      ],
+      default: "general",
     },
     title: {
       type: String,
@@ -35,6 +76,26 @@ const notificationSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    icon: {
+      type: String,
+      default: "",
+    },
+    image: {
+      type: String,
+      default: "",
+    },
+    url: {
+      type: String,
+      default: "/",
+    },
+    tag: {
+      type: String,
+      default: "fittogether",
+    },
+    activityId: {
+      type: String,
+      default: "",
+    },
     data: {
       type: mongoose.Schema.Types.Mixed,
       default: {},
@@ -43,13 +104,17 @@ const notificationSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    isDeleted: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
   }
 );
 
-notificationSchema.index({ userId: 1, readAt: 1, createdAt: -1 });
+notificationSchema.index({ userId: 1, isDeleted: 1, readAt: 1, createdAt: -1 });
 
 const Notification = mongoose.model("Notification", notificationSchema);
 

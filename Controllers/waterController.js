@@ -11,6 +11,7 @@ const {
 const { clearHabitPenalty } = require("../Utils/penaltyService");
 const { recalculateUserStreak } = require("../Utils/streakService");
 const { emitSquadFeedEvent } = require("../Utils/feedService");
+const { dispatchSocialActivityNotification } = require("../services/notificationService");
 
 const syncWaterGamification = async ({
   user,
@@ -112,6 +113,27 @@ const addWater = asyncHandler(async (req, res) => {
       meta: { totalConsumed, targetMl: waterLog.targetMl },
     }).catch(() => {});
   }
+
+  // Dispatch social notification to squadmates
+  const notifyTitle = crossedGoalNow
+    ? `💧 ${req.user.name} hit their hydration goal!`
+    : `💧 ${req.user.name} drank ${amountMl}ml water`;
+  const notifyBody = crossedGoalNow
+    ? `${req.user.name} reached ${totalConsumed}ml (${waterLog.targetMl}ml goal reached). Great consistency!`
+    : `Total logged today: ${totalConsumed}ml. Keep your streak hydrated!`;
+
+  dispatchSocialActivityNotification({
+    actorId: req.user._id,
+    actorName: req.user.name,
+    actorImage: req.user.profileImage || "",
+    type: "water_logged",
+    category: "water",
+    title: notifyTitle,
+    body: notifyBody,
+    url: "/water",
+    activityId: `${waterLog._id}_${Date.now()}`,
+    data: { amountMl: Number(amountMl), totalConsumed },
+  }).catch(() => {});
 
   return sendSuccess(res, {
     waterLog,

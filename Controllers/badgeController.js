@@ -11,6 +11,7 @@ const { sendSuccess } = require("../Utils/apiResponse");
 const { SEEDED_BADGES } = require("../Utils/gamification");
 const { emitGroupActivity } = require("../Utils/socket");
 const { emitSquadFeedEvent } = require("../Utils/feedService");
+const { dispatchSocialActivityNotification } = require("../services/notificationService");
 const { getLocalDateString } = require("../Utils/date");
 
 // @desc Get user's earned and available badges
@@ -140,6 +141,19 @@ const getMyBadges = asyncHandler(async (req, res) => {
           badgeIcon: badgeInfo?.icon || "Award",
         });
       }
+
+      dispatchSocialActivityNotification({
+        actorId: req.user._id,
+        actorName: req.user.name,
+        actorImage: req.user.profileImage || "",
+        type: "achievement_unlocked",
+        category: "achievement",
+        title: `🏆 ${req.user.name} unlocked ${badgeInfo?.name || "a new achievement"}!`,
+        body: badgeInfo?.description || `Congratulations to ${req.user.name} for unlocking ${badgeInfo?.name || code}!`,
+        url: "/badges",
+        activityId: `badge_${code}`,
+        groupId: membership?.groupId,
+      }).catch(() => {});
     }
   }
 

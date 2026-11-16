@@ -30,6 +30,11 @@ const config = {
   VAPID_PUBLIC_KEY: (process.env.VAPID_PUBLIC_KEY || "").trim(),
   VAPID_PRIVATE_KEY: (process.env.VAPID_PRIVATE_KEY || "").trim(),
   VAPID_SUBJECT: (process.env.VAPID_SUBJECT || "mailto:support@fittogether.app").trim(),
+  FIREBASE_PROJECT_ID: (process.env.FIREBASE_PROJECT_ID || "").trim(),
+  FIREBASE_CLIENT_EMAIL: (process.env.FIREBASE_CLIENT_EMAIL || "").trim(),
+  FIREBASE_PRIVATE_KEY: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n").trim(),
+  FIREBASE_SERVICE_ACCOUNT: (process.env.FIREBASE_SERVICE_ACCOUNT || "").trim(),
+  FIREBASE_CREDENTIALS_PATH: (process.env.FIREBASE_CREDENTIALS_PATH || process.env.GOOGLE_APPLICATION_CREDENTIALS || "").trim(),
   RATE_LIMIT_WINDOW_MS: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 15 * 60 * 1000,
   RATE_LIMIT_MAX: parseInt(process.env.RATE_LIMIT_MAX, 10) || 100,
 };

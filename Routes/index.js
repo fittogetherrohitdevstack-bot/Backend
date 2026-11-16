@@ -17,6 +17,7 @@ router.use("/challenges", require("./challenges"));
 router.use("/notifications", require("./notifications"));
 router.use("/feed", require("./feed"));
 router.use("/push", require("./push"));
+router.use("/devices", require("./devices"));
 router.use("/recap", require("./recap"));
 router.use("/moments", require("./moments"));
 

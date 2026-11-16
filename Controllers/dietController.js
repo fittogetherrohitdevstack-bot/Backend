@@ -11,6 +11,7 @@ const {
   buildMealSnapshotFromPlan,
   hasMealLogUserProgress,
 } = require("../Utils/dietSchedule");
+const { dispatchSocialActivityNotification } = require("../services/notificationService");
 
 // Helper to check if two date ranges overlap
 const checkOverlap = (startA, endA, startB, endB) => {
@@ -123,6 +124,18 @@ const createDietPlan = asyncHandler(async (req, res) => {
     timezone: userTimezone,
     plan: dietPlan,
   });
+
+  dispatchSocialActivityNotification({
+    actorId: req.user._id,
+    actorName: req.user.name,
+    actorImage: req.user.profileImage || "",
+    type: "diet_updated",
+    category: "diet",
+    title: `🥗 ${req.user.name} updated today's diet`,
+    body: `New diet plan "${dietPlan.name}" active. Check out their nutrition targets!`,
+    url: "/diet",
+    activityId: dietPlan._id.toString(),
+  }).catch(() => {});
 
   return sendSuccess(res, { dietPlan, ...syncStatus }, "Diet plan created successfully", 201);
 });
@@ -284,6 +297,18 @@ const activateDietPlan = asyncHandler(async (req, res) => {
     timezone: req.user.timezone || "Asia/Kolkata",
     plan,
   });
+
+  dispatchSocialActivityNotification({
+    actorId: req.user._id,
+    actorName: req.user.name,
+    actorImage: req.user.profileImage || "",
+    type: "diet_updated",
+    category: "diet",
+    title: `🥗 ${req.user.name} activated a new diet plan`,
+    body: `Plan "${plan.name}" is now active. Check out their nutrition targets!`,
+    url: "/diet",
+    activityId: plan._id.toString(),
+  }).catch(() => {});
 
   return sendSuccess(res, { plan, ...syncStatus }, "Diet plan activated successfully");
 });

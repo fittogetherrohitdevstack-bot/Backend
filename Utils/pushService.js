@@ -2,6 +2,7 @@ const webpush = require("web-push");
 const config = require("../Config/env");
 const PushSubscription = require("../Modals/PushSubscription");
 const ReminderSetting = require("../Modals/ReminderSetting");
+const { sendNativePushToUser } = require("../services/firebasePushService");
 
 let vapidConfigured = false;
 
@@ -111,6 +112,9 @@ const sendPushToUser = async (
   if (expiredIds.length > 0) {
     await subModel.deleteMany({ _id: { $in: expiredIds } });
   }
+
+  // Also dispatch to registered native mobile devices (Android/iOS)
+  sendNativePushToUser(userId, { title, body, url, type, tag, data }).catch(() => {});
 
   return { sent, removed };
 };

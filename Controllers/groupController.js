@@ -23,6 +23,7 @@ const {
   fetchUserLoggedDatesSet,
 } = require("../Utils/streakService");
 const { ensureWeeklyChallengeForGroup } = require("../Utils/challengeService");
+const { dispatchSocialActivityNotification } = require("../services/notificationService");
 
 // @desc Create a new fitness group
 // @route POST /api/groups
@@ -103,6 +104,19 @@ const joinGroup = asyncHandler(async (req, res) => {
     userId: req.user._id,
     userName: req.user.name,
   });
+
+  dispatchSocialActivityNotification({
+    actorId: req.user._id,
+    actorName: req.user.name,
+    actorImage: req.user.profileImage || "",
+    type: "friend_request_accepted",
+    category: "social",
+    title: `🤝 ${req.user.name} joined ${group.name}!`,
+    body: `Welcome your new squad teammate! Tap to see squad progress.`,
+    url: "/group",
+    activityId: group._id.toString(),
+    groupId: group._id,
+  }).catch(() => {});
 
   await recalculateGroupStreak(group._id).catch(() => {});
 
