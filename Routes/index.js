@@ -20,5 +20,7 @@ router.use("/push", require("./push"));
 router.use("/devices", require("./devices"));
 router.use("/recap", require("./recap"));
 router.use("/moments", require("./moments"));
+router.use("/chat", require("./chat"));
+router.use("/squads", require("./chat"));
 
 module.exports = router;
