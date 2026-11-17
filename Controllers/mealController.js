@@ -1212,7 +1212,7 @@ const aiEstimateMeal = asyncHandler(async (req, res) => {
 const aiQuickLogMeal = asyncHandler(async (req, res) => {
   const userId = req.user._id;
   const timezone = req.user.timezone || "Asia/Kolkata";
-  const { text, mealName, date, items } = req.body;
+  const { text, mealName, mealId, date, items } = req.body;
 
   if ((!text || !text.trim()) && (!items || items.length === 0)) {
     return sendError(res, "Please provide food details or items", 400);
@@ -1287,15 +1287,26 @@ const aiQuickLogMeal = asyncHandler(async (req, res) => {
     }
   }
 
-  // 2. Find matching meal or create slot
-  let targetMeal = mealLog.meals.find(
-    (m) => m.mealName.toLowerCase() === targetMealName.toLowerCase()
-  );
+  // 2. Find matching meal by ID or name
+  let targetMeal = null;
+  if (mealId) {
+    targetMeal = mealLog.meals.find((m) => m.mealId === mealId || String(m._id) === String(mealId));
+  }
+
+  if (!targetMeal && targetMealName) {
+    const searchLower = targetMealName.toLowerCase();
+    targetMeal = mealLog.meals.find(
+      (m) =>
+        m.mealName.toLowerCase() === searchLower ||
+        m.mealName.toLowerCase().includes(searchLower) ||
+        searchLower.includes(m.mealName.toLowerCase())
+    );
+  }
 
   if (!targetMeal) {
     targetMeal = {
       mealId: crypto.randomUUID(),
-      mealName: targetMealName,
+      mealName: targetMealName || "Meal",
       scheduledTime: "12:00",
       plannedFoodItems: [],
       status: "pending",
