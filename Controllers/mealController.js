@@ -601,6 +601,52 @@ const addUnplannedItem = asyncHandler(async (req, res) => {
 });
 
 /**
+ * @desc Get unique previous extra / unplanned food items for the logged-in user
+ * @route GET /api/meals/extras
+ * @access Private
+ */
+const getUserExtras = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+
+  // Retrieve user's previous meal logs containing unplanned items
+  const recentLogs = await MealLog.find({
+    userId,
+    "meals.plannedFoodItems.isUnplanned": true,
+  })
+    .sort({ date: -1 })
+    .limit(60)
+    .lean();
+
+  const extrasMap = new Map();
+
+  for (const log of recentLogs) {
+    for (const meal of log.meals || []) {
+      for (const item of meal.plannedFoodItems || []) {
+        if (item.isUnplanned && item.name && item.name.trim()) {
+          const key = item.name.trim().toLowerCase();
+          if (!extrasMap.has(key)) {
+            extrasMap.set(key, {
+              id: key,
+              name: item.name.trim(),
+              quantity: item.quantity || 100,
+              unit: item.unit || "g",
+              calories: Number(item.calories) || 0,
+              protein: Number(item.protein) || 0,
+              carbs: Number(item.carbs) || 0,
+              fats: Number(item.fats) || 0,
+              lastLoggedDate: log.date,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  const extras = Array.from(extrasMap.values());
+  return sendSuccess(res, { extras }, "User extra items retrieved");
+});
+
+/**
  * @desc Copy a day's diet chart or template to one or more dates
  * @route POST /api/meals/day/copy
  * @access Private
@@ -1317,6 +1363,7 @@ module.exports = {
   updateChartItem,
   updateChartMeal,
   addUnplannedItem,
+  getUserExtras,
   copyDayChart,
   getMealsSummary,
   getOrCreateDailyMealLog,

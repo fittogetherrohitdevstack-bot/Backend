@@ -11,6 +11,7 @@ router.put("/day", mealController.saveDayChart);
 router.patch("/day/items", mealController.updateChartItem);
 router.patch("/day/meals", mealController.updateChartMeal);
 router.post("/day/items", mealController.addUnplannedItem);
+router.get("/extras", mealController.getUserExtras);
 router.post("/day/copy", mealController.copyDayChart);
 router.get("/summary", mealController.getMealsSummary);
 
