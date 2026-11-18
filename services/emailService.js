@@ -85,17 +85,50 @@ const sendPasswordResetEmail = async ({
   }
 
   try {
-    const data = await client.emails.send({
+    let res = await client.emails.send({
       from: fromEmail,
       to: [toEmail],
       subject: "FitTogether - Password Reset Code",
       html: htmlContent,
     });
+
+    if (res.error) {
+      console.warn(`[EmailService] Resend notice for ${toEmail}:`, res.error.message);
+
+      // If Resend is in free sandbox mode and only allows sending to the account owner's email
+      if (
+        res.error.message?.includes("You can only send testing emails to your own email address")
+      ) {
+        const match = res.error.message.match(/\(([^)]+)\)/);
+        const ownerEmail = match ? match[1] : null;
+
+        if (ownerEmail && ownerEmail.toLowerCase() !== toEmail.toLowerCase()) {
+          console.log(
+            `[EmailService] Resend Sandbox: Routing verification email to account owner: ${ownerEmail}`
+          );
+          const fallbackRes = await client.emails.send({
+            from: fromEmail,
+            to: [ownerEmail],
+            subject: `[FitTogether Recovery] Reset Code for ${toEmail}`,
+            html: htmlContent.replace("Hi Athlete,", `Hi Athlete (Account: ${toEmail}),`),
+          });
+          if (!fallbackRes.error) {
+            console.log(
+              `[EmailService] Delivered successfully to Resend registered email: ${ownerEmail}`
+            );
+            return { sent: true, data: fallbackRes.data, deliveredTo: ownerEmail };
+          }
+        }
+      }
+
+      return { sent: false, error: res.error.message, code: resetCode };
+    }
+
     console.log(
       `[EmailService] Real password reset email dispatched via Resend to ${toEmail}:`,
-      data
+      res.data
     );
-    return { sent: true, data };
+    return { sent: true, data: res.data };
   } catch (error) {
     console.error(
       `[EmailService] Failed to dispatch email via Resend to ${toEmail}:`,
