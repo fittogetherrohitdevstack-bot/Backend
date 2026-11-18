@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const config = require("../Config/env");
 const User = require("../Modals/User");
@@ -186,8 +187,9 @@ const register = asyncHandler(async (req, res) => {
 // @route POST /api/auth/login
 const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
+  const normalizedEmail = (email || "").trim().toLowerCase();
 
-  const user = await User.findOne({ email: email.toLowerCase() }).select("+password");
+  const user = await User.findOne({ email: normalizedEmail }).select("+password");
   if (!user) {
     return sendError(res, "Invalid email or password", 401);
   }
@@ -561,6 +563,166 @@ const activateStreakFreeze = asyncHandler(async (req, res) => {
   );
 });
 
+// @desc Request password reset token / OTP
+// @route POST /api/auth/forgot-password
+const forgotPassword = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+  if (!email || !email.trim()) {
+    return sendError(res, "Please provide an email address", 400);
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const user = await User.findOne({ email: normalizedEmail });
+
+  // If user doesn't exist, return success for privacy/security without leaking existence
+  if (!user) {
+    return sendSuccess(
+      res,
+      {
+        email: normalizedEmail,
+        message: "If an account exists with this email, password reset instructions have been generated.",
+      },
+      "If an account exists with this email, password reset instructions have been generated."
+    );
+  }
+
+  // Generate 6-digit OTP code (user-friendly) and a 32-byte secure crypto token (for direct links)
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const rawToken = crypto.randomBytes(32).toString("hex");
+
+  // Store SHA-256 hashed versions in database
+  const hashedOtp = crypto.createHash("sha256").update(otp).digest("hex");
+  const hashedToken = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+  user.resetPasswordOtp = hashedOtp;
+  user.resetPasswordToken = hashedToken;
+  user.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes expiry
+
+  await user.save({ validateBeforeSave: false });
+
+  const isDev = config.NODE_ENV !== "production";
+  if (isDev) {
+    console.log(`\n========================================`);
+    console.log(`[AUTH] Password Reset Requested for: ${normalizedEmail}`);
+    console.log(`[AUTH] 6-Digit OTP Code: ${otp}`);
+    console.log(`[AUTH] Direct Reset Link: ${config.CLIENT_URL}/reset-password/${rawToken}`);
+    console.log(`========================================\n`);
+  }
+
+  return sendSuccess(
+    res,
+    {
+      email: normalizedEmail,
+      expiresIn: "15 minutes",
+      ...(isDev ? { devCode: otp, devToken: rawToken } : {}),
+    },
+    "Password reset instructions have been sent. Please check your verification code."
+  );
+});
+
+// @desc Verify reset token validity
+// @route GET /api/auth/reset-password/verify/:token
+const verifyResetToken = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+  if (!token) {
+    return sendError(res, "Invalid reset token", 400);
+  }
+
+  const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+  const user = await User.findOne({
+    resetPasswordToken: hashedToken,
+    resetPasswordExpires: { $gt: Date.now() },
+  });
+
+  if (!user) {
+    return sendError(res, "Password reset link is invalid or has expired", 400);
+  }
+
+  return sendSuccess(res, { valid: true, email: user.email }, "Token is valid");
+});
+
+// @desc Reset user password using OTP or Token
+// @route POST /api/auth/reset-password
+const resetPassword = asyncHandler(async (req, res) => {
+  const { email, code, token, newPassword } = req.body;
+
+  if (!newPassword || newPassword.length < 6) {
+    return sendError(res, "New password must be at least 6 characters long", 400);
+  }
+
+  let user = null;
+
+  // 1. If token is provided, verify via token
+  if (token && String(token).trim()) {
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(String(token).trim())
+      .digest("hex");
+
+    user = await User.findOne({
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: { $gt: Date.now() },
+    }).select("+password");
+  }
+
+  // 2. If code (and optional email) is provided, verify via OTP
+  if (!user && code && String(code).trim()) {
+    const hashedOtp = crypto
+      .createHash("sha256")
+      .update(String(code).trim())
+      .digest("hex");
+
+    const query = {
+      resetPasswordOtp: hashedOtp,
+      resetPasswordExpires: { $gt: Date.now() },
+    };
+    if (email && String(email).trim()) {
+      query.email = String(email).trim().toLowerCase();
+    }
+
+    user = await User.findOne(query).select("+password");
+  }
+
+  if (!user) {
+    return sendError(
+      res,
+      "Invalid or expired verification code. Please request a new password reset.",
+      400
+    );
+  }
+
+  // Update password (User pre('save') middleware will hash it with bcrypt)
+  user.password = newPassword;
+  user.resetPasswordToken = undefined;
+  user.resetPasswordOtp = undefined;
+  user.resetPasswordExpires = undefined;
+  await user.save();
+
+  // Generate fresh session tokens so user is immediately logged in
+  const { accessToken, refreshToken } = generateTokens(user);
+  res.cookie("refreshToken", refreshToken, setCookieOptions());
+
+  const profile = await FitnessProfile.findOne({ userId: user._id }).lean();
+
+  return sendSuccess(
+    res,
+    {
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        profileImage: user.profileImage,
+        timezone: user.timezone,
+        currentStreak: user.currentStreak,
+        longestStreak: user.longestStreak,
+      },
+      profile,
+      accessToken,
+    },
+    "Password has been reset successfully! You are now logged in."
+  );
+});
+
 module.exports = {
   register,
   login,
@@ -573,4 +735,7 @@ module.exports = {
   removeAvatar,
   updateSocialSettings,
   activateStreakFreeze,
+  forgotPassword,
+  resetPassword,
+  verifyResetToken,
 };
