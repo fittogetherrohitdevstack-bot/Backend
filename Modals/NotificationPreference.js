@@ -45,6 +45,10 @@ const notificationPreferenceSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    chatNotifications: {
+      type: Boolean,
+      default: true,
+    },
     soundEnabled: {
       type: Boolean,
       default: true,

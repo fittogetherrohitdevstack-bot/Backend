@@ -481,35 +481,63 @@ const getSquadChatInfo = async ({ groupId, userId }) => {
 /**
  * Dispatches push & in-app notifications for a new chat message
  */
-const dispatchChatNotifications = async ({ groupId, senderId, senderName, senderImage, text, messageId }) => {
+const dispatchChatNotifications = async ({
+  groupId,
+  senderId,
+  senderName,
+  senderImage,
+  text,
+  messageId,
+}) => {
   const group = await Group.findById(groupId).select("name").lean();
   if (!group) return;
+
+  let resolvedSenderName = senderName;
+  let resolvedSenderImage = senderImage;
+  if (!resolvedSenderName) {
+    const sender = await User.findById(senderId).select("name profileImage").lean();
+    if (sender) {
+      resolvedSenderName = sender.name;
+      resolvedSenderImage = sender.profileImage || "";
+    }
+  }
 
   const peerMemberships = await Membership.find({
     groupId,
     userId: { $ne: senderId },
     status: "active",
-  }).select("userId").lean();
+  })
+    .select("userId")
+    .lean();
 
   const previewText = text.length > 90 ? text.slice(0, 87) + "..." : text;
+
+  console.log(`[ChatService] Dispatching chat notifications to ${peerMemberships.length} squadmates in "${group.name}"`);
 
   for (const peer of peerMemberships) {
     const recipientId = peer.userId.toString();
 
-    // Check if user is currently active in this squad's chat room (suppress duplicate push)
-    if (typeof isUserActiveInSquadChat === "function" && isUserActiveInSquadChat(groupId.toString(), recipientId)) {
+    // Check if recipient is actively in this specific squad's chat view
+    const isActivelyChatting =
+      typeof isUserActiveInSquadChat === "function" &&
+      isUserActiveInSquadChat(groupId.toString(), recipientId);
+
+    // If actively looking at this squad chat, they already receive the real-time message live via socket.
+    // When they are on any other page or app is backgrounded/closed, they get full notifications.
+    if (isActivelyChatting) {
       continue;
     }
 
     createAndDispatchNotification({
       recipientUserId: recipientId,
       senderId,
-      senderName,
-      senderImage,
+      senderName: resolvedSenderName || "Squadmate",
+      senderImage: resolvedSenderImage || "",
       type: "chat_message",
       category: "chat",
-      title: `${senderName} in ${group.name}`,
+      title: `💬 ${resolvedSenderName || "Squadmate"} in ${group.name}`,
       body: previewText,
+      icon: resolvedSenderImage || "/web-app-manifest-192x192.png",
       url: `/chat/${groupId}`,
       tag: `fittogether-chat-${groupId}`,
       activityId: messageId,
@@ -518,7 +546,9 @@ const dispatchChatNotifications = async ({ groupId, senderId, senderName, sender
         squadName: group.name,
         messageId,
       },
-    }).catch(() => {});
+    }).catch((err) => {
+      console.warn(`[ChatService] Failed to notify peer ${recipientId}:`, err.message);
+    });
   }
 };
 

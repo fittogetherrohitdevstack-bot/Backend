@@ -139,6 +139,7 @@ const updatePreferences = asyncHandler(async (req, res) => {
     "workoutCompletion",
     "achievements",
     "friendRequests",
+    "chatNotifications",
     "scheduledReminders",
     "soundEnabled",
   ];

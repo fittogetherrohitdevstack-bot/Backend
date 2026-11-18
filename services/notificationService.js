@@ -35,6 +35,7 @@ const isNotificationCategoryAllowed = (pref, category, type) => {
   if (key.includes("workout")) return pref.workoutCompletion !== false;
   if (key.includes("badge") || key.includes("achievement")) return pref.achievements !== false;
   if (key.includes("friend") || key.includes("group")) return pref.friendRequests !== false;
+  if (key.includes("chat")) return pref.chatNotifications !== false;
   if (key.includes("reminder") || key.includes("nudge") || key.includes("recap"))
     return pref.scheduledReminders !== false;
 
