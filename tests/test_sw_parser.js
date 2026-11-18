@@ -40,24 +40,25 @@ function parsePushEventData(eventData) {
     }
   }
 
+  const isObj = payload && typeof payload === "object" && !Array.isArray(payload);
   const notifObj =
-    payload && typeof payload === "object" && typeof payload.notification === "object"
+    isObj && typeof payload.notification === "object" && payload.notification
       ? payload.notification
       : {};
   const dataObj =
-    payload && typeof payload === "object" && typeof payload.data === "object"
+    isObj && typeof payload.data === "object" && payload.data
       ? payload.data
       : {};
   const apsAlert =
-    payload &&
-    typeof payload === "object" &&
+    isObj &&
     payload.aps &&
-    typeof payload.aps.alert === "object"
+    typeof payload.aps.alert === "object" &&
+    payload.aps.alert
       ? payload.aps.alert
       : {};
 
   let candidateTitle = "";
-  if (payload && typeof payload === "object") {
+  if (isObj) {
     candidateTitle =
       payload.title ||
       notifObj.title ||
@@ -73,7 +74,7 @@ function parsePushEventData(eventData) {
   }
 
   let candidateBody = "";
-  if (payload && typeof payload === "object") {
+  if (isObj) {
     candidateBody =
       payload.body ||
       notifObj.body ||
@@ -110,20 +111,16 @@ function parsePushEventData(eventData) {
   }
 
   const senderName =
-    (payload && payload.senderName) ||
-    dataObj.senderName ||
-    (payload && payload.actorName) ||
-    dataObj.actorName ||
+    (isObj && (payload.senderName || dataObj.senderName || payload.actorName || dataObj.actorName)) ||
     "";
   const notifType =
-    (payload && payload.type) ||
-    dataObj.type ||
-    (payload && payload.category) ||
-    dataObj.category ||
+    (isObj && (payload.type || dataObj.type || payload.category || dataObj.category)) ||
     "";
 
   if (!candidateTitle && senderName) {
-    if (notifType === "meal_added") {
+    if (notifType === "chat_message" || notifType === "chat" || notifType === "squad_chat") {
+      candidateTitle = `💬 ${senderName} in squad chat`;
+    } else if (notifType === "meal_added") {
       candidateTitle = `🍎 ${senderName} added a new meal`;
     } else if (notifType === "water_logged") {
       candidateTitle = `💧 ${senderName} logged water`;
@@ -141,12 +138,12 @@ function parsePushEventData(eventData) {
   const finalTitle =
     candidateTitle && String(candidateTitle).trim().length > 0
       ? String(candidateTitle).trim()
-      : "FitTogether";
+      : "FitTogether Squad Alert 🔥";
 
   const finalBody =
     candidateBody && String(candidateBody).trim().length > 0
       ? String(candidateBody).trim()
-      : "Time to keep your squad streak burning!";
+      : "New squad activity waiting for you! Tap to open.";
 
   return { finalTitle, finalBody, senderName, notifType };
 }
@@ -228,8 +225,42 @@ test("SW Parser: Fallback ONLY when title is completely empty", () => {
     json: () => ({}),
   };
   const res = parsePushEventData(event);
-  assert.strictEqual(res.finalTitle, "FitTogether");
-  assert.strictEqual(res.finalBody, "Time to keep your squad streak burning!");
+  assert.strictEqual(res.finalTitle, "FitTogether Squad Alert 🔥");
+  assert.strictEqual(res.finalBody, "New squad activity waiting for you! Tap to open.");
+});
+
+test("SW Parser: Safe against null notification and null data objects", () => {
+  const data = {
+    notification: null,
+    data: null,
+    aps: null,
+    title: "💬 Rohit in IRON MAN",
+    body: "Hello squad members!",
+  };
+  const event = {
+    text: () => JSON.stringify(data),
+    json: () => data,
+  };
+  const res = parsePushEventData(event);
+  assert.strictEqual(res.finalTitle, "💬 Rohit in IRON MAN");
+  assert.strictEqual(res.finalBody, "Hello squad members!");
+});
+
+test("SW Parser: Chat message notification synthesis from senderName", () => {
+  const data = {
+    data: {
+      senderName: "Rohit",
+      type: "chat_message",
+      body: "Can everyone hit leg day tomorrow?",
+    },
+  };
+  const event = {
+    text: () => JSON.stringify(data),
+    json: () => data,
+  };
+  const res = parsePushEventData(event);
+  assert.strictEqual(res.finalTitle, "💬 Rohit in squad chat");
+  assert.strictEqual(res.finalBody, "Can everyone hit leg day tomorrow?");
 });
 
 test("SW Parser: Title synthesized from senderName + activity type when title omitted", () => {

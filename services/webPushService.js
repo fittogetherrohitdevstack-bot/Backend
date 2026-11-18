@@ -44,8 +44,8 @@ const buildWebPushPayload = ({
   senderImage = "",
   data = {},
 }) => {
-  const finalTitle = String(title || "FitTogether");
-  const finalBody = String(body || "Time to keep your squad streak burning!");
+  const finalTitle = String(title || "FitTogether Squad Alert 🔥");
+  const finalBody = String(body || "New squad update received! Tap to view.");
   const finalIcon = icon || "/web-app-manifest-192x192.png";
   const finalBadge = badge || "/favicon-96x96.png";
   const finalTag = String(tag || `fittogether-${type}`);
@@ -191,7 +191,11 @@ const sendWebPushToUser = async (
           expirationTime: sub.expirationTime || null,
           keys: sub.keys,
         },
-        payload
+        payload,
+        {
+          TTL: 86400, // 24 hours
+          urgency: "high",
+        }
       );
 
       sent++;

@@ -118,7 +118,11 @@ const sendPushToUser = async (
           expirationTime: sub.expirationTime || null,
           keys: sub.keys,
         },
-        payload
+        payload,
+        {
+          TTL: 86400, // 24 hours
+          urgency: "high",
+        }
       );
       sent++;
       console.log("[Push Delivery Success]", {
