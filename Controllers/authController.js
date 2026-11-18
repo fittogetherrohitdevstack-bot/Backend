@@ -22,6 +22,7 @@ const {
   uploadProfileAvatar,
   deletePrivateProgressPhoto,
 } = require("../Utils/cloudinary");
+const { sendPasswordResetEmail } = require("../services/emailService");
 
 const PRESET_AVATAR_IDS = new Set([
   "spark",
@@ -599,6 +600,16 @@ const forgotPassword = asyncHandler(async (req, res) => {
   user.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes expiry
 
   await user.save({ validateBeforeSave: false });
+
+  // Dispatch real email via Resend
+  await sendPasswordResetEmail({
+    toEmail: user.email,
+    userName: user.name,
+    resetCode: otp,
+    resetToken: rawToken,
+  }).catch((err) => {
+    console.error("[AUTH] Error sending email via Resend:", err.message);
+  });
 
   const isDev = config.NODE_ENV !== "production";
   if (isDev) {
