@@ -7,6 +7,8 @@ const FEED_EVENT_TYPES = [
   "streak_milestone",
   "badge_earned",
   "challenge_won",
+  "workout_completed",
+  "personal_record",
 ];
 
 const FEED_REACTION_EMOJIS = ["👏", "💪", "🔥", "❤️"];

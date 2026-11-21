@@ -7,10 +7,18 @@ const personalRecordSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    exerciseId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Exercise",
+    },
     exerciseName: {
       type: String,
       required: true,
       trim: true,
+    },
+    primaryMuscle: {
+      type: String,
+      default: "",
     },
     bestWeight: {
       type: Number,
@@ -24,6 +32,10 @@ const personalRecordSchema = new mongoose.Schema(
       type: Number, // weight * reps
       default: 0,
     },
+    estimatedOneRepMax: {
+      type: Number,
+      default: 0,
+    },
     achievedAt: {
       type: Date,
       default: Date.now,
@@ -32,6 +44,16 @@ const personalRecordSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "WorkoutSession",
     },
+    history: [
+      {
+        weight: { type: Number, default: 0 },
+        reps: { type: Number, default: 0 },
+        estimated1RM: { type: Number, default: 0 },
+        volume: { type: Number, default: 0 },
+        achievedAt: { type: Date, default: Date.now },
+        sessionId: { type: mongoose.Schema.Types.ObjectId, ref: "WorkoutSession" },
+      },
+    ],
   },
   {
     timestamps: true,

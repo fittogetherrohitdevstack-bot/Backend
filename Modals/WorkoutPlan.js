@@ -2,11 +2,18 @@ const mongoose = require("mongoose");
 
 const exerciseTargetSchema = new mongoose.Schema(
   {
+    exerciseId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Exercise",
+      default: null,
+    },
     name: { type: String, required: true, trim: true },
+    primaryMuscle: { type: String, default: "" },
     targetSets: { type: Number, default: 3 },
     targetReps: { type: Number, default: 10 },
     targetWeight: { type: Number, default: 0 }, // kg
     restSeconds: { type: Number, default: 60 },
+    notes: { type: String, default: "" },
   },
   { _id: false }
 );
@@ -14,8 +21,10 @@ const exerciseTargetSchema = new mongoose.Schema(
 const dayWorkoutScheduleSchema = new mongoose.Schema(
   {
     dayOfWeek: { type: Number, required: true, min: 0, max: 6 },
+    dayName: { type: String, default: "" }, // e.g. "Monday", "Push Day", "Day 1"
     workoutName: { type: String, default: "Workout" },
     isRestDay: { type: Boolean, default: false },
+    targetMuscles: { type: [String], default: [] },
     exercises: { type: [exerciseTargetSchema], default: [] },
   },
   { _id: false }
@@ -27,15 +36,44 @@ const workoutPlanSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+      index: true,
     },
     groupId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Group",
+      default: null,
     },
     name: {
       type: String,
       required: true,
       default: "Weekly Split",
+      trim: true,
+    },
+    description: {
+      type: String,
+      default: "",
+    },
+    fitnessLevel: {
+      type: String,
+      enum: ["beginner", "intermediate", "advanced", "all_levels"],
+      default: "all_levels",
+    },
+    goal: {
+      type: String,
+      enum: ["strength", "hypertrophy", "endurance", "fat_loss", "general"],
+      default: "hypertrophy",
+    },
+    daysPerWeek: {
+      type: Number,
+      default: 4,
+    },
+    isTemplate: {
+      type: Boolean,
+      default: false,
+    },
+    templateKey: {
+      type: String,
+      default: "",
     },
     isActive: {
       type: Boolean,

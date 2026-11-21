@@ -6,13 +6,24 @@ const setLogSchema = new mongoose.Schema(
     reps: { type: Number, default: 0 },
     weight: { type: Number, default: 0 }, // kg
     completed: { type: Boolean, default: false },
+    rpe: { type: Number, min: 1, max: 10 },
+    notes: { type: String, default: "" },
+    previousWeight: { type: Number, default: 0 },
+    previousReps: { type: Number, default: 0 },
+    isPR: { type: Boolean, default: false },
   },
   { _id: false }
 );
 
 const exerciseLogSchema = new mongoose.Schema(
   {
+    exerciseId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Exercise",
+    },
     name: { type: String, required: true },
+    primaryMuscle: { type: String, default: "" },
+    notes: { type: String, default: "" },
     sets: { type: [setLogSchema], default: [] },
   },
   { _id: false }
@@ -39,8 +50,14 @@ const workoutSessionSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["planned", "completed", "skipped", "rest"],
+      enum: ["planned", "in_progress", "completed", "skipped", "rest"],
       default: "planned",
+    },
+    startTime: {
+      type: Date,
+    },
+    endTime: {
+      type: Date,
     },
     exercises: {
       type: [exerciseLogSchema],
@@ -50,9 +67,43 @@ const workoutSessionSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    durationSeconds: {
+      type: Number,
+      default: 0,
+    },
+    totalVolumeKg: {
+      type: Number,
+      default: 0,
+    },
+    totalReps: {
+      type: Number,
+      default: 0,
+    },
+    caloriesBurned: {
+      type: Number,
+      default: 0,
+    },
+    targetMuscles: {
+      type: [String],
+      default: [],
+    },
+    rpe: {
+      type: Number,
+      min: 1,
+      max: 10,
+    },
     notes: {
       type: String,
       default: "",
+    },
+    sharedToFeed: {
+      type: Boolean,
+      default: false,
+    },
+    visibility: {
+      type: String,
+      enum: ["public", "squad", "private"],
+      default: "squad",
     },
   },
   {

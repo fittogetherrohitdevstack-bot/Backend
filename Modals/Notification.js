@@ -35,6 +35,7 @@ const notificationSchema = new mongoose.Schema(
         "moment_posted",
         "workout",
         "workout_completed",
+        "personal_record",
         "streak",
         "badge",
         "achievement_unlocked",
