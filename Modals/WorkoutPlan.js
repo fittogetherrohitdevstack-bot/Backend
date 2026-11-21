@@ -10,6 +10,11 @@ const exerciseTargetSchema = new mongoose.Schema(
     },
     name: { type: String, required: true, trim: true, default: "Exercise" },
     primaryMuscle: { type: String, default: "" },
+    videoUrl: { type: String, default: "" },
+    gifUrl: { type: String, default: "" },
+    thumbnailUrl: { type: String, default: "" },
+    images: { type: [String], default: [] },
+    mediaType: { type: String, default: "text_only" },
     targetSets: { type: Number, default: 3 },
     targetReps: { type: Number, default: 10 },
     targetWeight: { type: Number, default: 0 }, // kg

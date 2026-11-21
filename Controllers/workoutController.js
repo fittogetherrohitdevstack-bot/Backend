@@ -926,10 +926,14 @@ const getWorkoutDashboard = asyncHandler(async (req, res) => {
   const dayOfWeek = getDayOfWeek(todayStr); // 0 = Sun..6 = Sat
 
   // Check for active in-progress session (started within last 24h)
-  const activeSession = await WorkoutSession.findOne({
+  let activeSession = await WorkoutSession.findOne({
     userId: req.user._id,
     status: "in_progress",
   }).sort({ createdAt: -1 });
+
+  if (activeSession) {
+    activeSession = await hydrateSessionExercisesMedia(activeSession);
+  }
 
   // Today's session (completed, rest, skipped, or in_progress)
   const todaySession = await WorkoutSession.findOne({
@@ -1083,13 +1087,87 @@ const getTodayWorkout = asyncHandler(async (req, res) => {
 // 4. LIVE WORKOUT TRACKER & SESSION LIFECYCLE
 // ==========================================
 
+/**
+ * Hydrates video, gif, instructions, and media details for exercises in a session if missing.
+ */
+const hydrateSessionExercisesMedia = async (session) => {
+  if (!session || !Array.isArray(session.exercises)) return session;
+  let modified = false;
+
+  for (const ex of session.exercises) {
+    if (!ex.videoUrl && !ex.gifUrl && (!ex.images || ex.images.length === 0)) {
+      const { exerciseDoc } = await resolveExerciseAndAliases(ex.exerciseId || ex.name);
+      if (exerciseDoc) {
+        if (!ex.exerciseId && exerciseDoc._id) {
+          ex.exerciseId = exerciseDoc._id;
+          modified = true;
+        }
+        if (exerciseDoc.name && (!ex.name || ex.name === "Exercise")) {
+          ex.name = exerciseDoc.name;
+          modified = true;
+        }
+        if (exerciseDoc.primaryMuscle && !ex.primaryMuscle) {
+          ex.primaryMuscle = exerciseDoc.primaryMuscle;
+          modified = true;
+        }
+        if (exerciseDoc.videoUrl) {
+          ex.videoUrl = exerciseDoc.videoUrl;
+          modified = true;
+        }
+        if (exerciseDoc.videoUrlFemale) {
+          ex.videoUrlFemale = exerciseDoc.videoUrlFemale;
+          modified = true;
+        }
+        if (exerciseDoc.gifUrl) {
+          ex.gifUrl = exerciseDoc.gifUrl;
+          modified = true;
+        }
+        if (exerciseDoc.thumbnailUrl) {
+          ex.thumbnailUrl = exerciseDoc.thumbnailUrl;
+          modified = true;
+        }
+        if (exerciseDoc.mediaType) {
+          ex.mediaType = exerciseDoc.mediaType;
+          modified = true;
+        }
+        if (exerciseDoc.images && exerciseDoc.images.length > 0) {
+          ex.images = exerciseDoc.images;
+          modified = true;
+        }
+        if (exerciseDoc.instructions && exerciseDoc.instructions.length > 0) {
+          ex.instructions = exerciseDoc.instructions;
+          modified = true;
+        }
+        if (exerciseDoc.equipment) {
+          ex.equipment = exerciseDoc.equipment;
+          modified = true;
+        }
+      }
+    }
+  }
+
+  if (modified) {
+    try {
+      await session.save();
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  return session;
+};
+
 // @desc Get active in-progress workout session
 // @route GET /api/workouts/sessions/active
 const getActiveSession = asyncHandler(async (req, res) => {
-  const session = await WorkoutSession.findOne({
+  let session = await WorkoutSession.findOne({
     userId: req.user._id,
     status: "in_progress",
   }).sort({ createdAt: -1 });
+
+  if (session) {
+    session = await hydrateSessionExercisesMedia(session);
+  }
 
   return sendSuccess(res, { session: session || null, hasActive: !!session });
 });
@@ -1107,9 +1185,10 @@ const startWorkoutSession = asyncHandler(async (req, res) => {
   });
 
   if (existingActive) {
+    const hydrated = await hydrateSessionExercisesMedia(existingActive);
     return sendSuccess(
       res,
-      { session: existingActive, resumed: true },
+      { session: hydrated, resumed: true },
       "Resumed existing in-progress session"
     );
   }
@@ -1137,19 +1216,46 @@ const startWorkoutSession = asyncHandler(async (req, res) => {
         exerciseId: ex.exerciseId && mongoose.Types.ObjectId.isValid(ex.exerciseId) ? ex.exerciseId : null,
         name: (ex.name || "").trim() || "Exercise",
         primaryMuscle: ex.primaryMuscle || "",
+        videoUrl: ex.videoUrl || "",
+        videoUrlFemale: ex.videoUrlFemale || "",
+        gifUrl: ex.gifUrl || "",
+        thumbnailUrl: ex.thumbnailUrl || "",
+        images: Array.isArray(ex.images) ? ex.images : [],
+        mediaType: ex.mediaType || (ex.videoUrl ? "video" : ex.gifUrl ? "gif" : "text_only"),
+        instructions: Array.isArray(ex.instructions) ? ex.instructions : [],
+        equipment: ex.equipment || "",
+        difficulty: ex.difficulty || "",
+        category: ex.category || "",
         notes: ex.notes || "",
         sets,
       };
     });
   }
 
-  // 3. Hydrate previous performance and records for each exercise from most recent completed session
+  // 3. Hydrate previous performance, records, AND rich media for each exercise
   if (initialExercises.length > 0) {
     for (const ex of initialExercises) {
       const exName = (ex.name || "").trim();
       if (!exName) continue;
 
       const { exerciseDoc, queryNames, matchConditions } = await resolveExerciseAndAliases(ex.exerciseId || exName);
+
+      // Populate rich media from exercise database
+      if (exerciseDoc) {
+        if (!ex.exerciseId) ex.exerciseId = exerciseDoc._id;
+        if (exerciseDoc.name) ex.name = exerciseDoc.name;
+        if (exerciseDoc.primaryMuscle && !ex.primaryMuscle) ex.primaryMuscle = exerciseDoc.primaryMuscle;
+        if (exerciseDoc.videoUrl) ex.videoUrl = exerciseDoc.videoUrl;
+        if (exerciseDoc.videoUrlFemale) ex.videoUrlFemale = exerciseDoc.videoUrlFemale;
+        if (exerciseDoc.gifUrl) ex.gifUrl = exerciseDoc.gifUrl;
+        if (exerciseDoc.thumbnailUrl) ex.thumbnailUrl = exerciseDoc.thumbnailUrl;
+        if (exerciseDoc.mediaType) ex.mediaType = exerciseDoc.mediaType;
+        if (exerciseDoc.images && exerciseDoc.images.length > 0) ex.images = exerciseDoc.images;
+        if (exerciseDoc.instructions && exerciseDoc.instructions.length > 0) ex.instructions = exerciseDoc.instructions;
+        if (exerciseDoc.equipment && !ex.equipment) ex.equipment = exerciseDoc.equipment;
+        if (exerciseDoc.difficulty && !ex.difficulty) ex.difficulty = exerciseDoc.difficulty;
+        if (exerciseDoc.category && !ex.category) ex.category = exerciseDoc.category;
+      }
 
       // Find the latest completed session containing this exercise
       let latestSession = null;
@@ -1258,7 +1364,33 @@ const updateLiveSession = asyncHandler(async (req, res) => {
 
   const { exercises, durationSeconds, notes, workoutName } = req.body;
 
-  if (exercises !== undefined) session.exercises = exercises;
+  if (exercises !== undefined && Array.isArray(exercises)) {
+    const existingMap = new Map();
+    (session.exercises || []).forEach((ex) => {
+      existingMap.set(ex.name?.toLowerCase().trim(), ex);
+      if (ex.exerciseId) existingMap.set(ex.exerciseId.toString(), ex);
+    });
+
+    session.exercises = exercises.map((newEx) => {
+      const match =
+        existingMap.get(newEx.exerciseId?.toString()) ||
+        existingMap.get(newEx.name?.toLowerCase().trim());
+      return {
+        ...newEx,
+        videoUrl: newEx.videoUrl || match?.videoUrl || "",
+        videoUrlFemale: newEx.videoUrlFemale || match?.videoUrlFemale || "",
+        gifUrl: newEx.gifUrl || match?.gifUrl || "",
+        thumbnailUrl: newEx.thumbnailUrl || match?.thumbnailUrl || "",
+        images: (newEx.images && newEx.images.length > 0) ? newEx.images : (match?.images || []),
+        mediaType: newEx.mediaType || match?.mediaType || (newEx.videoUrl ? "video" : newEx.gifUrl ? "gif" : "text_only"),
+        instructions: (newEx.instructions && newEx.instructions.length > 0) ? newEx.instructions : (match?.instructions || []),
+        equipment: newEx.equipment || match?.equipment || "",
+        category: newEx.category || match?.category || "",
+        difficulty: newEx.difficulty || match?.difficulty || "",
+      };
+    });
+  }
+
   if (durationSeconds !== undefined) {
     session.durationSeconds = durationSeconds;
     session.durationMinutes = Math.round(durationSeconds / 60);
