@@ -1567,17 +1567,25 @@ const shareWorkoutToFeed = asyncHandler(async (req, res) => {
 // 5. WORKOUT HISTORY & ANALYTICS
 // ==========================================
 
-// @desc Get workout history with date, muscle, and plan filters
+// @desc Get workout history with date, search, muscle, and plan filters
 // @route GET /api/workouts/sessions/history
 const getWorkoutHistory = asyncHandler(async (req, res) => {
-  const { startDate, endDate, muscle, planId, page = 1, limit = 20 } = req.query;
+  const { startDate, endDate, timeRange, search, muscle, planId, page = 1, limit = 20 } = req.query;
 
   const query = {
     userId: req.user._id,
     status: { $in: ["completed", "rest"] },
   };
 
-  if (startDate && endDate) {
+  const todayStr = getLocalDateString(new Date(), req.user.timezone);
+
+  if (timeRange === "week") {
+    const { weekStart, weekEnd } = getISOWeekDetails(todayStr);
+    query.date = { $gte: weekStart, $lte: weekEnd };
+  } else if (timeRange === "month") {
+    const monthStart = todayStr.slice(0, 7) + "-01";
+    query.date = { $gte: monthStart, $lte: todayStr };
+  } else if (startDate && endDate) {
     query.date = { $gte: startDate, $lte: endDate };
   } else if (startDate) {
     query.date = { $gte: startDate };
@@ -1585,17 +1593,40 @@ const getWorkoutHistory = asyncHandler(async (req, res) => {
     query.date = { $lte: endDate };
   }
 
-  if (muscle && muscle !== "All") {
-    query.targetMuscles = muscle;
+  const andConditions = [];
+
+  if (search && search.trim()) {
+    const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    andConditions.push({
+      $or: [
+        { workoutName: { $regex: escaped, $options: "i" } },
+        { "exercises.name": { $regex: escaped, $options: "i" } },
+        { notes: { $regex: escaped, $options: "i" } },
+      ],
+    });
   }
 
-  if (planId) {
+  if (muscle && muscle !== "All") {
+    andConditions.push({
+      $or: [
+        { targetMuscles: muscle },
+        { "exercises.primaryMuscle": muscle },
+      ],
+    });
+  }
+
+  if (andConditions.length > 0) {
+    query.$and = andConditions;
+  }
+
+  if (planId && mongoose.Types.ObjectId.isValid(planId)) {
     query.workoutPlanId = planId;
   }
 
   const skip = (Number(page) - 1) * Number(limit);
   const total = await WorkoutSession.countDocuments(query);
   const sessions = await WorkoutSession.find(query)
+    .populate("workoutPlanId", "name")
     .sort({ date: -1, createdAt: -1 })
     .skip(skip)
     .limit(Number(limit))
@@ -1935,6 +1966,149 @@ const saveWorkoutSession = asyncHandler(async (req, res) => {
   return sendSuccess(res, { session }, "Workout session saved successfully");
 });
 
+// @desc Edit and update a previously completed workout session
+// @route PUT /api/workouts/sessions/:id
+const updateCompletedWorkoutSession = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, "Invalid session ID format", 400);
+  }
+
+  const session = await WorkoutSession.findOne({
+    _id: req.params.id,
+    userId: req.user._id,
+  });
+
+  if (!session) {
+    return sendError(res, "Workout session not found or unauthorized", 404);
+  }
+
+  const { workoutName, date, durationMinutes, notes, exercises } = req.body;
+
+  if (workoutName !== undefined) session.workoutName = workoutName.trim() || session.workoutName;
+  if (date !== undefined) session.date = date;
+  if (notes !== undefined) session.notes = notes;
+  if (durationMinutes !== undefined) {
+    session.durationMinutes = Math.max(1, Number(durationMinutes) || 1);
+    session.durationSeconds = session.durationMinutes * 60;
+  }
+
+  if (Array.isArray(exercises)) {
+    // Sanitize exercises and recompute totals
+    let totalVolumeKg = 0;
+    let totalReps = 0;
+    const trainedMusclesSet = new Set();
+
+    const sanitizedExercises = exercises.map((ex) => {
+      const exName = (ex.name || "").trim() || "Exercise";
+      const primaryMuscle = ex.primaryMuscle || "Full Body";
+      trainedMusclesSet.add(primaryMuscle);
+
+      const sets = (ex.sets || []).map((s, idx) => {
+        const weight = Number(s.weight) || 0;
+        const reps = Number(s.reps) || 0;
+        const completed = s.completed !== false;
+
+        if (completed) {
+          totalVolumeKg += weight * reps;
+          totalReps += reps;
+        }
+
+        return {
+          setNumber: idx + 1,
+          weight,
+          reps,
+          completed,
+          rpe: Number(s.rpe) || null,
+          notes: s.notes || "",
+          previousWeight: Number(s.previousWeight) || 0,
+          previousReps: Number(s.previousReps) || 0,
+          isPR: Boolean(s.isPR),
+        };
+      });
+
+      return {
+        exerciseId: ex.exerciseId && mongoose.Types.ObjectId.isValid(ex.exerciseId) ? ex.exerciseId : null,
+        name: exName,
+        primaryMuscle,
+        notes: ex.notes || "",
+        sets,
+      };
+    });
+
+    session.exercises = sanitizedExercises;
+    session.totalVolumeKg = Math.round(totalVolumeKg);
+    session.totalReps = totalReps;
+    session.targetMuscles = Array.from(trainedMusclesSet);
+    session.caloriesBurned = calculateEstimatedCalories(
+      session.durationMinutes,
+      session.totalVolumeKg
+    );
+  }
+
+  await session.save();
+
+  // Recalculate streak in case date or session count changed
+  await recalculateUserStreak(req.user._id).catch(() => {});
+
+  return sendSuccess(res, { session }, "Workout session updated successfully");
+});
+
+// @desc Delete a completed workout session with data consistency checks
+// @route DELETE /api/workouts/sessions/:id
+const deleteCompletedWorkoutSession = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, "Invalid session ID format", 400);
+  }
+
+  const session = await WorkoutSession.findOne({
+    _id: req.params.id,
+    userId: req.user._id,
+  });
+
+  if (!session) {
+    return sendError(res, "Workout session not found or unauthorized", 404);
+  }
+
+  // Safe deletion: remove session
+  await WorkoutSession.findByIdAndDelete(session._id);
+
+  // Clean up any PersonalRecord entries whose peak or history was registered by this session
+  const prs = await PersonalRecord.find({
+    userId: req.user._id,
+    $or: [{ sessionId: session._id }, { "history.sessionId": session._id }],
+  });
+
+  for (const pr of prs) {
+    pr.history = pr.history.filter(
+      (h) => h.sessionId && h.sessionId.toString() !== session._id.toString()
+    );
+
+    if (pr.history.length > 0) {
+      pr.bestWeight = Math.max(...pr.history.map((h) => h.weight || 0));
+      pr.bestReps = Math.max(...pr.history.map((h) => h.reps || 0));
+      pr.bestVolume = Math.max(...pr.history.map((h) => h.volume || 0));
+      pr.estimatedOneRepMax = Math.max(...pr.history.map((h) => h.estimated1RM || 0));
+      const latestHist = pr.history[pr.history.length - 1];
+      pr.achievedAt = latestHist.achievedAt || new Date();
+      pr.sessionId = latestHist.sessionId || null;
+      await pr.save();
+    } else {
+      await PersonalRecord.findByIdAndDelete(pr._id);
+    }
+  }
+
+  // Clean up any FeedEvent created for this session
+  await FeedEvent.deleteMany({
+    userId: req.user._id,
+    "meta.sessionId": session._id,
+  }).catch(() => {});
+
+  // Recalculate streak
+  await recalculateUserStreak(req.user._id).catch(() => {});
+
+  return sendSuccess(res, null, "Workout session deleted successfully");
+});
+
 // @desc Backward-compatible PATCH /api/workouts/sessions/:id
 const updateWorkoutSession = asyncHandler(async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
@@ -1995,6 +2169,8 @@ module.exports = {
   getWorkoutHistory,
   getCompletedWorkoutSessions,
   getWorkoutSessionById,
+  updateCompletedWorkoutSession,
+  deleteCompletedWorkoutSession,
   getWorkoutAnalytics,
   getMuscleMapData,
   getPersonalRecords,

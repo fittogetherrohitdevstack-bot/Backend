@@ -36,6 +36,8 @@ router.post("/sessions/:id/finish", workoutController.finishWorkoutSession);
 router.post("/sessions/:id/cancel", workoutController.cancelWorkoutSession);
 router.post("/sessions/:id/share", workoutController.shareWorkoutToFeed);
 router.get("/sessions/:id", workoutController.getWorkoutSessionById);
+router.put("/sessions/:id", workoutController.updateCompletedWorkoutSession);
+router.delete("/sessions/:id", workoutController.deleteCompletedWorkoutSession);
 
 // Legacy Session Endpoints (Preserved)
 router.post("/sessions", workoutController.saveWorkoutSession);
