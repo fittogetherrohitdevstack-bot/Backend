@@ -9,6 +9,7 @@ router.use(protect);
 // Exercise Library
 // ==========================================
 router.get("/exercises", workoutController.getExercises);
+router.get("/exercises/filters", workoutController.getExerciseFilters);
 router.post("/exercises/custom", workoutController.createCustomExercise);
 router.get("/exercises/:idOrSlug", workoutController.getExerciseById);
 router.post("/exercises/:id/favorite", workoutController.toggleFavoriteExercise);

@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const mongoose = require("mongoose");
 const WorkoutPlan = require("../Modals/WorkoutPlan");
 const WorkoutSession = require("../Modals/WorkoutSession");
@@ -29,10 +31,25 @@ const ensureExercisesSeeded = async () => {
   try {
     if (mongoose.connection.readyState !== 1) return;
     const count = await Exercise.countDocuments();
-    if (count === 0) {
-      console.log("[WorkoutSeed] Seeding 50+ built-in exercises...");
-      await Exercise.insertMany(EXERCISE_SEED_DATA);
-      console.log("[WorkoutSeed] Exercise library seeded successfully.");
+    if (count < 100) {
+      console.log("[WorkoutSeed] Seeding comprehensive exercise catalog (2,000+ exercises)...");
+      const catalogPath = path.join(__dirname, "../seed/comprehensiveExerciseCatalog.json");
+      if (fs.existsSync(catalogPath)) {
+        const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
+        const ops = catalog.map((ex) => ({
+          updateOne: {
+            filter: { slug: ex.slug },
+            update: { $set: ex },
+            upsert: true,
+          },
+        }));
+        for (let i = 0; i < ops.length; i += 500) {
+          await Exercise.bulkWrite(ops.slice(i, i + 500), { ordered: false });
+        }
+        console.log("[WorkoutSeed] Exercise library seeded successfully.");
+      } else {
+        await Exercise.insertMany(EXERCISE_SEED_DATA);
+      }
     }
   } catch (err) {
     console.error("[WorkoutSeed] Error seeding exercises:", err.message);
@@ -143,26 +160,44 @@ const syncWorkoutPointsAndNotify = async (user, sessionDate, session) => {
 // 1. EXERCISE LIBRARY CONTROLLERS
 // ==========================================
 
-// @desc Get all exercises with filtering, searching, favorites
+// @desc Get all exercises with filtering, searching, favorites, and pagination
 // @route GET /api/workouts/exercises
 const getExercises = asyncHandler(async (req, res) => {
   await ensureExercisesSeeded();
 
-  const { search, muscle, equipment, difficulty, category, favoritesOnly } = req.query;
+  const {
+    search,
+    muscle,
+    equipment,
+    difficulty,
+    category,
+    mediaType,
+    favoritesOnly,
+    sortBy = "media",
+    page = 1,
+    limit = 24,
+  } = req.query;
+
   const filter = {};
 
   if (search && search.trim()) {
     const s = search.trim();
     filter.$or = [
       { name: { $regex: s, $options: "i" } },
+      { alternativeNames: { $regex: s, $options: "i" } },
       { primaryMuscle: { $regex: s, $options: "i" } },
       { secondaryMuscles: { $regex: s, $options: "i" } },
       { equipment: { $regex: s, $options: "i" } },
+      { description: { $regex: s, $options: "i" } },
     ];
   }
 
   if (muscle && muscle !== "All") {
-    filter.primaryMuscle = muscle;
+    filter.$or = [
+      ...(filter.$or || []),
+      { primaryMuscle: muscle },
+      { secondaryMuscles: muscle },
+    ];
   }
 
   if (equipment && equipment !== "All") {
@@ -177,13 +212,42 @@ const getExercises = asyncHandler(async (req, res) => {
     filter.category = category;
   }
 
+  if (mediaType && mediaType !== "all") {
+    if (mediaType === "video") {
+      filter.mediaType = "video";
+    } else if (mediaType === "gif") {
+      filter.mediaType = "gif";
+    } else if (mediaType === "images") {
+      filter.mediaType = "images";
+    } else if (mediaType === "any_media") {
+      filter.mediaType = { $in: ["video", "gif", "images"] };
+    }
+  }
+
   if (favoritesOnly === "true") {
     filter.favoriteBy = req.user._id;
   }
 
-  const exercises = await Exercise.find(filter)
-    .sort({ name: 1 })
-    .lean();
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 24));
+  const skip = (pageNum - 1) * limitNum;
+
+  let sortOption = { name: 1 };
+  if (sortBy === "media") {
+    // Show video first, then gif, then images, then alphabetical
+    sortOption = { videoUrl: -1, gifUrl: -1, name: 1 };
+  } else if (sortBy === "difficulty") {
+    sortOption = { difficulty: 1, name: 1 };
+  }
+
+  const [total, exercises] = await Promise.all([
+    Exercise.countDocuments(filter),
+    Exercise.find(filter)
+      .sort(sortOption)
+      .skip(skip)
+      .limit(limitNum)
+      .lean(),
+  ]);
 
   const formatted = exercises.map((ex) => ({
     ...ex,
@@ -192,10 +256,46 @@ const getExercises = asyncHandler(async (req, res) => {
       : false,
   }));
 
-  return sendSuccess(res, { exercises: formatted, total: formatted.length });
+  return sendSuccess(res, {
+    exercises: formatted,
+    pagination: {
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages: Math.ceil(total / limitNum),
+      hasMore: pageNum * limitNum < total,
+    },
+  });
 });
 
-// @desc Get single exercise by ID or slug
+// @desc Get filter options and counts
+// @route GET /api/workouts/exercises/filters
+const getExerciseFilters = asyncHandler(async (req, res) => {
+  const [totalCount, videoCount, gifCount, imagesCount, muscles, equipment, categories] =
+    await Promise.all([
+      Exercise.countDocuments(),
+      Exercise.countDocuments({ mediaType: "video" }),
+      Exercise.countDocuments({ mediaType: "gif" }),
+      Exercise.countDocuments({ mediaType: "images" }),
+      Exercise.distinct("primaryMuscle"),
+      Exercise.distinct("equipment"),
+      Exercise.distinct("category"),
+    ]);
+
+  return sendSuccess(res, {
+    totalCount,
+    mediaCounts: {
+      video: videoCount,
+      gif: gifCount,
+      images: imagesCount,
+    },
+    muscles: muscles.sort(),
+    equipment: equipment.sort(),
+    categories: categories.sort(),
+  });
+});
+
+// @desc Get single exercise by ID or slug with similar exercises
 // @route GET /api/workouts/exercises/:idOrSlug
 const getExerciseById = asyncHandler(async (req, res) => {
   const { idOrSlug } = req.params;
@@ -214,7 +314,19 @@ const getExerciseById = asyncHandler(async (req, res) => {
     ? exercise.favoriteBy.some((id) => id.toString() === req.user._id.toString())
     : false;
 
-  return sendSuccess(res, { exercise: { ...exercise, isFavorite } });
+  // Find up to 4 similar exercises with the same primary muscle
+  const similarExercises = await Exercise.find({
+    _id: { $ne: exercise._id },
+    primaryMuscle: exercise.primaryMuscle,
+  })
+    .sort({ videoUrl: -1, gifUrl: -1, name: 1 })
+    .limit(4)
+    .lean();
+
+  return sendSuccess(res, {
+    exercise: { ...exercise, isFavorite },
+    similarExercises,
+  });
 });
 
 // @desc Toggle exercise favorite
@@ -1386,6 +1498,7 @@ module.exports = {
   // Exercises
   getExercises,
   getExerciseById,
+  getExerciseFilters,
   toggleFavoriteExercise,
   createCustomExercise,
   // Templates & Plans

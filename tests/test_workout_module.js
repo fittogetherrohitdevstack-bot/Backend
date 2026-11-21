@@ -101,4 +101,47 @@ assert(isNewRepsPR, "Should detect new reps PR");
 assert(isNew1RMPR, "Should detect new 1RM PR");
 console.log("✓ Personal Record Detection Logic verified");
 
-console.log("\nALL WORKOUT MODULE UNIT TESTS PASSED SUCCESSFULLY! 🎉\n");
+// 6. Verify 2,000+ Exercise Comprehensive Catalog
+const fs = require("fs");
+const path = require("path");
+const catalogPath = path.join(__dirname, "../seed/comprehensiveExerciseCatalog.json");
+assert(fs.existsSync(catalogPath), "comprehensiveExerciseCatalog.json must exist");
+const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf-8"));
+
+assert(Array.isArray(catalog), "Catalog must be an array");
+assert(catalog.length >= 2000, `Expected >= 2000 exercises, found ${catalog.length}`);
+console.log(`✓ Comprehensive Catalog verified with ${catalog.length} unique exercises`);
+
+// Verify Media Types & Distributions
+const mediaCounts = { video: 0, gif: 0, images: 0, none: 0 };
+const muscleCounts = {};
+const categoryCounts = {};
+
+catalog.forEach((ex) => {
+  assert(ex.name, "Exercise must have name");
+  assert(ex.primaryMuscle, `Exercise ${ex.name} must have primaryMuscle`);
+  assert(ex.mediaType, `Exercise ${ex.name} must have mediaType`);
+  mediaCounts[ex.mediaType] = (mediaCounts[ex.mediaType] || 0) + 1;
+  muscleCounts[ex.primaryMuscle] = (muscleCounts[ex.primaryMuscle] || 0) + 1;
+  if (ex.category) {
+    categoryCounts[ex.category] = (categoryCounts[ex.category] || 0) + 1;
+  }
+
+  if (ex.mediaType === "video") {
+    const videoSrc = ex.videoUrl || ex.videoUrlFemale;
+    assert(videoSrc && videoSrc.endsWith(".mp4"), `Video exercise ${ex.name} must have .mp4 videoUrl or videoUrlFemale`);
+  }
+  if (ex.mediaType === "gif") {
+    assert(ex.gifUrl && ex.gifUrl.endsWith(".gif"), `GIF exercise ${ex.name} must have .gif gifUrl`);
+  }
+});
+
+assert(mediaCounts.video >= 300, `Expected >= 300 video exercises, found ${mediaCounts.video}`);
+assert(mediaCounts.gif >= 1000, `Expected >= 1000 GIF exercises, found ${mediaCounts.gif}`);
+assert(mediaCounts.images >= 400, `Expected >= 400 diagram exercises, found ${mediaCounts.images}`);
+
+console.log(`✓ Media Breakdown: Videos=${mediaCounts.video}, GIFs=${mediaCounts.gif}, Diagrams=${mediaCounts.images}, Text-only=${mediaCounts.none}`);
+console.log(`✓ Muscle Groups Covered: ${Object.keys(muscleCounts).length} distinct muscle groups`);
+console.log(`✓ Categories Covered: ${Object.keys(categoryCounts).length} distinct categories`);
+
+console.log("\nALL WORKOUT MODULE & EXERCISE EXPANSION UNIT TESTS PASSED SUCCESSFULLY! 🎉\n");

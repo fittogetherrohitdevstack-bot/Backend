@@ -13,17 +13,28 @@ const EXERCISE_MUSCLES = [
   "Calves",
   "Glutes",
   "Abs",
+  "Obliques",
+  "Lower Back",
   "Full Body",
 ];
 
 const EXERCISE_EQUIPMENT = [
+  "Barbells",
+  "Dumbbells",
+  "Cable Machine",
+  "Machines",
+  "No Equipment",
+  "Resistance Bands",
+  "Kettlebells",
+  "Pull-up Bar",
+  "Bench",
+  "Smith Machine",
   "Barbell",
   "Dumbbell",
-  "Machine",
   "Cable",
+  "Machine",
   "Bodyweight",
   "Kettlebell",
-  "Smith Machine",
   "Resistance Band",
   "Plate",
   "Other",
@@ -34,11 +45,17 @@ const EXERCISE_DIFFICULTY = ["Beginner", "Intermediate", "Advanced"];
 const EXERCISE_CATEGORIES = [
   "Strength",
   "Hypertrophy",
-  "Endurance",
-  "Calisthenics",
-  "Olympic",
+  "Bodyweight",
   "Cardio",
+  "HIIT",
+  "Stretching",
   "Mobility",
+  "Warm-up",
+  "Cool-down",
+  "Plyometrics",
+  "Olympic",
+  "Calisthenics",
+  "Endurance",
 ];
 
 const exerciseSchema = new mongoose.Schema(
@@ -56,6 +73,10 @@ const exerciseSchema = new mongoose.Schema(
       lowercase: true,
       unique: true,
       index: true,
+    },
+    alternativeNames: {
+      type: [String],
+      default: [],
     },
     description: {
       type: String,
@@ -86,16 +107,24 @@ const exerciseSchema = new mongoose.Schema(
     category: {
       type: String,
       enum: EXERCISE_CATEGORIES,
-      default: "Hypertrophy",
+      default: "Strength",
       index: true,
     },
     instructions: {
       type: [String],
       default: [],
     },
+    formCues: {
+      type: [String],
+      default: [],
+    },
     commonMistakes: {
       type: [String],
       default: [],
+    },
+    breathingInstructions: {
+      type: String,
+      default: "",
     },
     alternatives: {
       type: [String],
@@ -104,6 +133,46 @@ const exerciseSchema = new mongoose.Schema(
     tips: {
       type: [String],
       default: [],
+    },
+    mediaType: {
+      type: String,
+      enum: ["video", "gif", "images", "none"],
+      default: "none",
+      index: true,
+    },
+    videoUrl: {
+      type: String,
+      default: null,
+    },
+    videoUrlFemale: {
+      type: String,
+      default: null,
+    },
+    gifUrl: {
+      type: String,
+      default: null,
+    },
+    thumbnailUrl: {
+      type: String,
+      default: null,
+    },
+    images: {
+      type: [String],
+      default: [],
+    },
+    source: {
+      type: String,
+      default: "fittogether",
+      index: true,
+    },
+    sourceId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    attribution: {
+      type: String,
+      default: "",
     },
     isCustom: {
       type: Boolean,
@@ -128,7 +197,8 @@ const exerciseSchema = new mongoose.Schema(
   }
 );
 
-exerciseSchema.index({ name: "text", description: "text" });
+exerciseSchema.index({ name: "text", alternativeNames: "text", description: "text" });
+exerciseSchema.index({ primaryMuscle: 1, equipment: 1, difficulty: 1, category: 1 });
 
 const Exercise = mongoose.model("Exercise", exerciseSchema);
 
