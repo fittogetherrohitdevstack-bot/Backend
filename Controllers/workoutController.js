@@ -399,6 +399,32 @@ const createCustomExercise = asyncHandler(async (req, res) => {
 // 2. WORKOUT PLAN MANAGEMENT
 // ==========================================
 
+// Helper to sanitize schedule and exercise objects before creating/updating plans
+const sanitizeSchedule = (schedule) => {
+  if (!Array.isArray(schedule)) return [];
+  return schedule.map((day, idx) => ({
+    dayOfWeek: typeof day.dayOfWeek === "number" ? day.dayOfWeek : (idx + 1) % 7,
+    dayName: day.dayName || `Day ${idx + 1}`,
+    workoutName: day.workoutName || "Workout",
+    isRestDay: Boolean(day.isRestDay),
+    targetMuscles: Array.isArray(day.targetMuscles) ? day.targetMuscles : [],
+    exercises: day.isRestDay
+      ? []
+      : (Array.isArray(day.exercises) ? day.exercises : [])
+          .filter((ex) => ex && (ex.name || typeof ex === "string"))
+          .map((ex) => ({
+            exerciseId: ex.exerciseId && mongoose.Types.ObjectId.isValid(ex.exerciseId) ? ex.exerciseId : null,
+            name: (typeof ex === "string" ? ex : ex.name || "Exercise").trim() || "Exercise",
+            primaryMuscle: ex.primaryMuscle || "",
+            targetSets: Number(ex.targetSets) || 3,
+            targetReps: Number(ex.targetReps) || 10,
+            targetWeight: Number(ex.targetWeight) || 0,
+            restSeconds: Number(ex.restSeconds) || 60,
+            notes: ex.notes || "",
+          })),
+  }));
+};
+
 // @desc Get built-in split templates
 // @route GET /api/workouts/templates
 const getTemplates = asyncHandler(async (req, res) => {
@@ -425,13 +451,13 @@ const applyTemplate = asyncHandler(async (req, res) => {
   const newPlan = await WorkoutPlan.create({
     userId: req.user._id,
     name: template.name,
-    description: template.description,
-    fitnessLevel: template.fitnessLevel,
-    goal: template.goal,
-    daysPerWeek: template.daysPerWeek,
+    description: template.description || "",
+    fitnessLevel: template.fitnessLevel || "Intermediate",
+    goal: template.goal || "Hypertrophy",
+    daysPerWeek: template.daysPerWeek || 4,
     isTemplate: false,
     templateKey: template.templateKey,
-    schedule: template.schedule,
+    schedule: sanitizeSchedule(template.schedule),
     isActive: !!makeActive,
   });
 
@@ -460,15 +486,17 @@ const createWorkoutPlan = asyncHandler(async (req, res) => {
     );
   }
 
+  const cleanSchedule = sanitizeSchedule(schedule);
+
   const workoutPlan = await WorkoutPlan.create({
     userId: req.user._id,
-    groupId: groupId || null,
-    name: name || "Custom Workout Plan",
+    groupId: (groupId && mongoose.Types.ObjectId.isValid(groupId)) ? groupId : null,
+    name: name ? name.trim() : "Custom Workout Plan",
     description: description || "",
     fitnessLevel: fitnessLevel || "Intermediate",
     goal: goal || "Hypertrophy",
-    daysPerWeek: daysPerWeek || (schedule ? schedule.filter((s) => !s.isRestDay).length : 4),
-    schedule: schedule || [],
+    daysPerWeek: daysPerWeek || (cleanSchedule.length > 0 ? cleanSchedule.filter((s) => !s.isRestDay).length : 4),
+    schedule: cleanSchedule,
     isActive: isActive !== false,
   });
 
@@ -490,13 +518,13 @@ const updateWorkoutPlan = asyncHandler(async (req, res) => {
   const { name, description, fitnessLevel, goal, daysPerWeek, schedule, isActive, groupId } =
     req.body;
 
-  if (name !== undefined) plan.name = name;
+  if (name !== undefined) plan.name = name.trim() || plan.name;
   if (description !== undefined) plan.description = description;
   if (fitnessLevel !== undefined) plan.fitnessLevel = fitnessLevel;
   if (goal !== undefined) plan.goal = goal;
   if (daysPerWeek !== undefined) plan.daysPerWeek = daysPerWeek;
-  if (schedule !== undefined) plan.schedule = schedule;
-  if (groupId !== undefined) plan.groupId = groupId;
+  if (schedule !== undefined) plan.schedule = sanitizeSchedule(schedule);
+  if (groupId !== undefined) plan.groupId = (groupId && mongoose.Types.ObjectId.isValid(groupId)) ? groupId : null;
 
   if (isActive === true) {
     await WorkoutPlan.updateMany(

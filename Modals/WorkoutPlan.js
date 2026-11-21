@@ -6,8 +6,9 @@ const exerciseTargetSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Exercise",
       default: null,
+      set: (v) => (v === "" || !v ? null : v),
     },
-    name: { type: String, required: true, trim: true },
+    name: { type: String, required: true, trim: true, default: "Exercise" },
     primaryMuscle: { type: String, default: "" },
     targetSets: { type: Number, default: 3 },
     targetReps: { type: Number, default: 10 },
@@ -42,6 +43,7 @@ const workoutPlanSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Group",
       default: null,
+      set: (v) => (v === "" || !v ? null : v),
     },
     name: {
       type: String,
@@ -55,13 +57,13 @@ const workoutPlanSchema = new mongoose.Schema(
     },
     fitnessLevel: {
       type: String,
-      enum: ["beginner", "intermediate", "advanced", "all_levels"],
-      default: "all_levels",
+      default: "Intermediate",
+      trim: true,
     },
     goal: {
       type: String,
-      enum: ["strength", "hypertrophy", "endurance", "fat_loss", "general"],
-      default: "hypertrophy",
+      default: "Hypertrophy",
+      trim: true,
     },
     daysPerWeek: {
       type: Number,

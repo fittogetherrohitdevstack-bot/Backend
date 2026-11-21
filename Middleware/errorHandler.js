@@ -17,7 +17,7 @@ const errorHandler = (err, req, res, next) => {
     const errors = Object.values(err.errors).map((e) => e.message);
     return res.status(400).json({
       success: false,
-      message: "Validation Error",
+      message: errors.join(", ") || "Validation Error",
       errors,
     });
   }

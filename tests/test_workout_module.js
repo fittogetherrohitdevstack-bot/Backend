@@ -144,4 +144,57 @@ console.log(`✓ Media Breakdown: Videos=${mediaCounts.video}, GIFs=${mediaCount
 console.log(`✓ Muscle Groups Covered: ${Object.keys(muscleCounts).length} distinct muscle groups`);
 console.log(`✓ Categories Covered: ${Object.keys(categoryCounts).length} distinct categories`);
 
-console.log("\nALL WORKOUT MODULE & EXERCISE EXPANSION UNIT TESTS PASSED SUCCESSFULLY! 🎉\n");
+// 7. Verify WorkoutPlan Validation & Template Compatibility
+const mongoose = require("mongoose");
+const WorkoutPlan = require("../Modals/WorkoutPlan");
+const dummyUserId = new mongoose.Types.ObjectId();
+
+async function runPlanValidationTests() {
+  for (const template of WORKOUT_TEMPLATES) {
+    const planDoc = new WorkoutPlan({
+      userId: dummyUserId,
+      name: template.name,
+      description: template.description,
+      fitnessLevel: template.fitnessLevel,
+      goal: template.goal,
+      daysPerWeek: template.daysPerWeek,
+      schedule: template.schedule,
+      isTemplate: false,
+      isActive: true,
+    });
+    await planDoc.validate();
+  }
+  console.log(`✓ All ${WORKOUT_TEMPLATES.length} templates passed WorkoutPlan schema validation`);
+
+  // Test custom plan with mixed casing and empty exerciseId
+  const customPlanDoc = new WorkoutPlan({
+    userId: dummyUserId,
+    name: "My Custom Split",
+    fitnessLevel: "Intermediate",
+    goal: "Hypertrophy & Strength",
+    schedule: [
+      {
+        dayOfWeek: 1,
+        dayName: "Chest Day",
+        isRestDay: false,
+        exercises: [
+          {
+            exerciseId: "",
+            name: "Barbell Bench Press",
+            primaryMuscle: "Chest",
+            targetSets: 4,
+            targetReps: 8,
+            restSeconds: 90,
+          },
+        ],
+      },
+    ],
+  });
+  await customPlanDoc.validate();
+  assert.strictEqual(customPlanDoc.schedule[0].exercises[0].exerciseId, null, "exerciseId empty string must convert to null");
+  console.log("✓ Custom plan with empty string exerciseId and custom goal passed validation");
+
+  console.log("\nALL WORKOUT MODULE & EXERCISE EXPANSION UNIT TESTS PASSED SUCCESSFULLY! 🎉\n");
+}
+
+runPlanValidationTests();

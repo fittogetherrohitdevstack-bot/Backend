@@ -20,6 +20,8 @@ const exerciseLogSchema = new mongoose.Schema(
     exerciseId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Exercise",
+      default: null,
+      set: (v) => (v === "" || !v ? null : v),
     },
     name: { type: String, required: true },
     primaryMuscle: { type: String, default: "" },
@@ -39,6 +41,8 @@ const workoutSessionSchema = new mongoose.Schema(
     workoutPlanId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "WorkoutPlan",
+      default: null,
+      set: (v) => (v === "" || !v ? null : v),
     },
     date: {
       type: String, // YYYY-MM-DD
