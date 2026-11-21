@@ -179,25 +179,33 @@ const getExercises = asyncHandler(async (req, res) => {
   } = req.query;
 
   const filter = {};
+  const andConditions = [];
 
   if (search && search.trim()) {
-    const s = search.trim();
-    filter.$or = [
-      { name: { $regex: s, $options: "i" } },
-      { alternativeNames: { $regex: s, $options: "i" } },
-      { primaryMuscle: { $regex: s, $options: "i" } },
-      { secondaryMuscles: { $regex: s, $options: "i" } },
-      { equipment: { $regex: s, $options: "i" } },
-      { description: { $regex: s, $options: "i" } },
-    ];
+    const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    andConditions.push({
+      $or: [
+        { name: { $regex: escaped, $options: "i" } },
+        { alternativeNames: { $regex: escaped, $options: "i" } },
+        { primaryMuscle: { $regex: escaped, $options: "i" } },
+        { secondaryMuscles: { $regex: escaped, $options: "i" } },
+        { equipment: { $regex: escaped, $options: "i" } },
+        { description: { $regex: escaped, $options: "i" } },
+      ],
+    });
   }
 
   if (muscle && muscle !== "All") {
-    filter.$or = [
-      ...(filter.$or || []),
-      { primaryMuscle: muscle },
-      { secondaryMuscles: muscle },
-    ];
+    andConditions.push({
+      $or: [
+        { primaryMuscle: muscle },
+        { secondaryMuscles: muscle },
+      ],
+    });
+  }
+
+  if (andConditions.length > 0) {
+    filter.$and = andConditions;
   }
 
   if (equipment && equipment !== "All") {
@@ -224,7 +232,7 @@ const getExercises = asyncHandler(async (req, res) => {
     }
   }
 
-  if (favoritesOnly === "true") {
+  if (favoritesOnly === "true" || favoritesOnly === true) {
     filter.favoriteBy = req.user._id;
   }
 
@@ -332,9 +340,17 @@ const getExerciseById = asyncHandler(async (req, res) => {
 // @desc Toggle exercise favorite
 // @route POST /api/workouts/exercises/:id/favorite
 const toggleFavoriteExercise = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, "Invalid exercise ID format", 400);
+  }
+
   const exercise = await Exercise.findById(req.params.id);
   if (!exercise) {
     return sendError(res, "Exercise not found", 404);
+  }
+
+  if (!Array.isArray(exercise.favoriteBy)) {
+    exercise.favoriteBy = [];
   }
 
   const isFav = exercise.favoriteBy.some(
@@ -506,6 +522,10 @@ const createWorkoutPlan = asyncHandler(async (req, res) => {
 // @desc Update workout plan
 // @route PUT /api/workouts/:id
 const updateWorkoutPlan = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, "Invalid plan ID format", 400);
+  }
+
   const plan = await WorkoutPlan.findOne({
     _id: req.params.id,
     userId: req.user._id,
@@ -543,6 +563,10 @@ const updateWorkoutPlan = asyncHandler(async (req, res) => {
 // @desc Duplicate workout plan
 // @route POST /api/workouts/:id/duplicate
 const duplicateWorkoutPlan = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, "Invalid plan ID format", 400);
+  }
+
   const sourcePlan = await WorkoutPlan.findOne({
     _id: req.params.id,
     userId: req.user._id,
@@ -569,6 +593,10 @@ const duplicateWorkoutPlan = asyncHandler(async (req, res) => {
 // @desc Activate a workout plan
 // @route POST /api/workouts/:id/activate
 const activateWorkoutPlan = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, "Invalid plan ID format", 400);
+  }
+
   const plan = await WorkoutPlan.findOne({
     _id: req.params.id,
     userId: req.user._id,
@@ -592,6 +620,10 @@ const activateWorkoutPlan = asyncHandler(async (req, res) => {
 // @desc Delete workout plan
 // @route DELETE /api/workouts/:id
 const deleteWorkoutPlan = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, "Invalid plan ID format", 400);
+  }
+
   const plan = await WorkoutPlan.findOneAndDelete({
     _id: req.params.id,
     userId: req.user._id,
@@ -823,8 +855,8 @@ const startWorkoutSession = asyncHandler(async (req, res) => {
         });
       }
       return {
-        exerciseId: ex.exerciseId || null,
-        name: ex.name,
+        exerciseId: ex.exerciseId && mongoose.Types.ObjectId.isValid(ex.exerciseId) ? ex.exerciseId : null,
+        name: (ex.name || "").trim() || "Exercise",
         primaryMuscle: ex.primaryMuscle || "",
         notes: ex.notes || "",
         sets,
@@ -835,9 +867,11 @@ const startWorkoutSession = asyncHandler(async (req, res) => {
   // 3. Hydrate previous best weights/reps for each exercise from PersonalRecords
   if (initialExercises.length > 0) {
     for (const ex of initialExercises) {
+      const exName = (ex.name || "").trim();
+      if (!exName) continue;
       const pr = await PersonalRecord.findOne({
         userId: req.user._id,
-        exerciseName: ex.name.trim(),
+        exerciseName: exName,
       }).lean();
 
       if (pr) {
@@ -871,6 +905,10 @@ const startWorkoutSession = asyncHandler(async (req, res) => {
 // @desc Live autosave for workout tracker (prevents progress loss)
 // @route PUT /api/workouts/sessions/:id/live-save
 const updateLiveSession = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, "Invalid session ID format", 400);
+  }
+
   const session = await WorkoutSession.findOne({
     _id: req.params.id,
     userId: req.user._id,
@@ -897,6 +935,10 @@ const updateLiveSession = asyncHandler(async (req, res) => {
 // @desc Finish and finalize a workout session with automatic PR detection & rewards
 // @route POST /api/workouts/sessions/:id/finish
 const finishWorkoutSession = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, "Invalid session ID format", 400);
+  }
+
   const session = await WorkoutSession.findOne({
     _id: req.params.id,
     userId: req.user._id,
@@ -988,13 +1030,19 @@ const finishWorkoutSession = asyncHandler(async (req, res) => {
             ],
           });
           set.isPR = true;
-          newPersonalRecords.push({
+          const existingIdx = newPersonalRecords.findIndex((p) => p.exerciseName === ex.name.trim());
+          const firstPr = {
             exerciseName: ex.name.trim(),
             metric: "First Record",
             bestWeight: weight,
             bestReps: reps,
             estimatedOneRepMax: estimated1RM,
-          });
+          };
+          if (existingIdx >= 0) {
+            newPersonalRecords[existingIdx] = firstPr;
+          } else {
+            newPersonalRecords.push(firstPr);
+          }
         } else {
           let broken = false;
           let metric = "";
@@ -1032,13 +1080,19 @@ const finishWorkoutSession = asyncHandler(async (req, res) => {
             await pr.save();
             set.isPR = true;
 
-            newPersonalRecords.push({
+            const existingIdx = newPersonalRecords.findIndex((p) => p.exerciseName === ex.name.trim());
+            const updatedPr = {
               exerciseName: ex.name.trim(),
               metric,
               bestWeight: weight,
               bestReps: reps,
               estimatedOneRepMax: estimated1RM,
-            });
+            };
+            if (existingIdx >= 0) {
+              newPersonalRecords[existingIdx] = updatedPr;
+            } else {
+              newPersonalRecords.push(updatedPr);
+            }
           }
         }
       }
@@ -1094,6 +1148,10 @@ const finishWorkoutSession = asyncHandler(async (req, res) => {
 // @desc Cancel an in-progress workout session
 // @route POST /api/workouts/sessions/:id/cancel
 const cancelWorkoutSession = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, "Invalid session ID format", 400);
+  }
+
   const session = await WorkoutSession.findOne({
     _id: req.params.id,
     userId: req.user._id,
@@ -1115,6 +1173,10 @@ const cancelWorkoutSession = asyncHandler(async (req, res) => {
 // @desc Share completed workout session to squad feed with caption
 // @route POST /api/workouts/sessions/:id/share
 const shareWorkoutToFeed = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, "Invalid session ID format", 400);
+  }
+
   const session = await WorkoutSession.findOne({
     _id: req.params.id,
     userId: req.user._id,
@@ -1215,6 +1277,10 @@ const getWorkoutHistory = asyncHandler(async (req, res) => {
 // @desc Get single workout session detail
 // @route GET /api/workouts/sessions/:id
 const getWorkoutSessionById = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, "Invalid session ID format", 400);
+  }
+
   const session = await WorkoutSession.findOne({
     _id: req.params.id,
     userId: req.user._id,
@@ -1500,6 +1566,10 @@ const saveWorkoutSession = asyncHandler(async (req, res) => {
 
 // @desc Backward-compatible PATCH /api/workouts/sessions/:id
 const updateWorkoutSession = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, "Invalid session ID format", 400);
+  }
+
   const session = await WorkoutSession.findOne({
     _id: req.params.id,
     userId: req.user._id,

@@ -141,7 +141,7 @@ const computeChallengeMemberProgress = async (challenge, userId, fallbackProgres
         date: range,
         status: { $in: ["completed", "rest"] },
       }).lean();
-      return workouts.length;
+      return new Set(workouts.map((w) => w.date)).size;
     }
 
     case "streak":
