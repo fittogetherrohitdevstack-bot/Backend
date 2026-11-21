@@ -15,6 +15,26 @@ const setLogSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const previousPerformanceSchema = new mongoose.Schema(
+  {
+    lastDate: { type: String, default: "" },
+    workoutName: { type: String, default: "" },
+    sessionId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    sets: [
+      {
+        setNumber: Number,
+        weight: Number,
+        reps: Number,
+        _id: false,
+      },
+    ],
+    bestWeight: { type: Number, default: 0 },
+    bestReps: { type: Number, default: 0 },
+    totalVolumeKg: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
 const exerciseLogSchema = new mongoose.Schema(
   {
     exerciseId: {
@@ -27,6 +47,10 @@ const exerciseLogSchema = new mongoose.Schema(
     primaryMuscle: { type: String, default: "" },
     notes: { type: String, default: "" },
     sets: { type: [setLogSchema], default: [] },
+    previousPerformance: {
+      type: previousPerformanceSchema,
+      default: null,
+    },
   },
   { _id: false }
 );

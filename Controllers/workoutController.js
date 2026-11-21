@@ -411,6 +411,285 @@ const createCustomExercise = asyncHandler(async (req, res) => {
   return sendSuccess(res, { exercise: customExercise }, "Custom exercise created", 201);
 });
 
+/**
+ * Helper to resolve an exercise identifier (ObjectId, slug, or name) into canonical doc and search aliases
+ */
+const resolveExerciseAndAliases = async (identifier) => {
+  if (!identifier) return { exerciseDoc: null, queryNames: [], matchConditions: [] };
+
+  const raw = decodeURIComponent(identifier).trim();
+  const isObjectId = /^[0-9a-fA-F]{24}$/.test(raw);
+
+  let exerciseDoc = null;
+  if (isObjectId) {
+    exerciseDoc = await Exercise.findById(raw).lean();
+  }
+
+  if (!exerciseDoc) {
+    const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    exerciseDoc = await Exercise.findOne({
+      $or: [
+        { slug: raw.toLowerCase() },
+        { name: new RegExp(`^${escaped}$`, "i") },
+        { alternativeNames: new RegExp(`^${escaped}$`, "i") },
+      ],
+    }).lean();
+  }
+
+  const queryNames = exerciseDoc
+    ? [exerciseDoc.name, ...(exerciseDoc.alternativeNames || [])]
+    : [raw];
+
+  const matchConditions = [];
+  if (exerciseDoc?._id) {
+    matchConditions.push({ "exercises.exerciseId": exerciseDoc._id });
+  }
+
+  for (const name of queryNames) {
+    if (!name) continue;
+    const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    matchConditions.push({ "exercises.name": new RegExp(`^${escaped}$`, "i") });
+  }
+
+  return { exerciseDoc, queryNames, matchConditions };
+};
+
+// @desc Get user's latest completed performance for a specific exercise
+// @route GET /api/workouts/exercises/:identifier/previous-performance
+const getExercisePreviousPerformance = asyncHandler(async (req, res) => {
+  const { identifier } = req.params;
+  const { exerciseDoc, queryNames, matchConditions } = await resolveExerciseAndAliases(identifier);
+
+  if (matchConditions.length === 0) {
+    return sendSuccess(res, {
+      hasPreviousPerformance: false,
+      message: "First time performing this exercise. Your progress starts today!",
+      exercise: null,
+      previousSession: null,
+      personalRecord: null,
+      suggestion: "Set a strong benchmark for your first session!",
+    });
+  }
+
+  // Find the most recent valid completed session containing this exercise
+  const latestSession = await WorkoutSession.findOne({
+    userId: req.user._id,
+    status: "completed",
+    $or: matchConditions,
+  })
+    .sort({ date: -1, endTime: -1, createdAt: -1 })
+    .lean();
+
+  // Query personal record for this exercise
+  const canonicalName = exerciseDoc?.name || decodeURIComponent(identifier).trim();
+  const pr = await PersonalRecord.findOne({
+    userId: req.user._id,
+    $or: [
+      ...(exerciseDoc?._id ? [{ exerciseId: exerciseDoc._id }] : []),
+      { exerciseName: new RegExp(`^${canonicalName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+    ],
+  }).lean();
+
+  if (!latestSession) {
+    return sendSuccess(res, {
+      hasPreviousPerformance: false,
+      message: "First time performing this exercise. Your progress starts today!",
+      exercise: exerciseDoc
+        ? {
+            _id: exerciseDoc._id,
+            name: exerciseDoc.name,
+            primaryMuscle: exerciseDoc.primaryMuscle,
+            equipment: exerciseDoc.equipment,
+            videoUrl: exerciseDoc.videoUrl,
+            gifUrl: exerciseDoc.gifUrl,
+          }
+        : null,
+      previousSession: null,
+      personalRecord: pr
+        ? {
+            bestWeight: pr.bestWeight,
+            bestReps: pr.bestReps,
+            estimatedOneRepMax: pr.estimatedOneRepMax,
+            achievedAt: pr.achievedAt,
+          }
+        : null,
+      suggestion: "First time performing this exercise. Your progress starts today!",
+    });
+  }
+
+  // Find the exact exercise inside the session
+  const foundEx = (latestSession.exercises || []).find((e) => {
+    if (exerciseDoc?._id && e.exerciseId && e.exerciseId.toString() === exerciseDoc._id.toString()) {
+      return true;
+    }
+    const eName = (e.name || "").toLowerCase().trim();
+    return queryNames.some((qn) => qn.toLowerCase().trim() === eName);
+  });
+
+  const completedSets = (foundEx?.sets || []).filter((s) => s.completed !== false);
+  const bestWeight = completedSets.length > 0 ? Math.max(...completedSets.map((s) => s.weight || 0)) : 0;
+  const bestReps = completedSets.length > 0 ? Math.max(...completedSets.map((s) => s.reps || 0)) : 0;
+  const totalVolumeKg = completedSets.reduce((sum, s) => sum + (s.weight || 0) * (s.reps || 0), 0);
+
+  // Progressive overload assistance suggestion
+  let suggestion = "";
+  if (completedSets.length > 0) {
+    const topSet = completedSets.reduce(
+      (best, s) =>
+        (s.weight || 0) > (best.weight || 0)
+          ? s
+          : (s.weight || 0) === (best.weight || 0) && (s.reps || 0) > (best.reps || 0)
+          ? s
+          : best,
+      completedSets[0]
+    );
+    suggestion = `You previously completed ${topSet.weight || 0} kg × ${topSet.reps || 0}. Try matching this performance or adding 1 rep!`;
+  } else {
+    suggestion = "Maintain consistent form and track your sets today.";
+  }
+
+  return sendSuccess(res, {
+    hasPreviousPerformance: true,
+    message: `Last performed on ${latestSession.date} in ${latestSession.workoutName || "Workout"}`,
+    exercise: exerciseDoc
+      ? {
+          _id: exerciseDoc._id,
+          name: exerciseDoc.name,
+          primaryMuscle: exerciseDoc.primaryMuscle,
+          equipment: exerciseDoc.equipment,
+          videoUrl: exerciseDoc.videoUrl,
+          gifUrl: exerciseDoc.gifUrl,
+        }
+      : { name: foundEx?.name || canonicalName, primaryMuscle: foundEx?.primaryMuscle || "" },
+    previousSession: {
+      sessionId: latestSession._id,
+      date: latestSession.date,
+      workoutName: latestSession.workoutName || "Workout",
+      setsCount: completedSets.length,
+      sets: completedSets.map((s) => ({
+        setNumber: s.setNumber,
+        weight: s.weight || 0,
+        reps: s.reps || 0,
+        rpe: s.rpe || null,
+        isPR: Boolean(s.isPR),
+      })),
+      totalVolumeKg: Math.round(totalVolumeKg),
+      bestWeight,
+      bestReps,
+    },
+    personalRecord: pr
+      ? {
+          bestWeight: pr.bestWeight,
+          bestReps: pr.bestReps,
+          estimatedOneRepMax: pr.estimatedOneRepMax,
+          achievedAt: pr.achievedAt,
+        }
+      : null,
+    suggestion,
+  });
+});
+
+// @desc Get chronological workout performance history for a specific exercise
+// @route GET /api/workouts/exercises/:identifier/history
+const getExerciseHistory = asyncHandler(async (req, res) => {
+  const { identifier } = req.params;
+  const { exerciseDoc, queryNames, matchConditions } = await resolveExerciseAndAliases(identifier);
+
+  if (matchConditions.length === 0) {
+    return sendSuccess(res, {
+      exerciseName: decodeURIComponent(identifier),
+      history: [],
+      totalSessions: 0,
+    });
+  }
+
+  const sessions = await WorkoutSession.find({
+    userId: req.user._id,
+    status: "completed",
+    $or: matchConditions,
+  })
+    .sort({ date: -1, endTime: -1, createdAt: -1 })
+    .limit(25)
+    .lean();
+
+  const history = sessions
+    .map((s) => {
+      const ex = (s.exercises || []).find((e) => {
+        if (exerciseDoc?._id && e.exerciseId && e.exerciseId.toString() === exerciseDoc._id.toString()) {
+          return true;
+        }
+        const eName = (e.name || "").toLowerCase().trim();
+        return queryNames.some((qn) => qn.toLowerCase().trim() === eName);
+      });
+
+      if (!ex) return null;
+
+      const completedSets = (ex.sets || []).filter((set) => set.completed !== false);
+      if (completedSets.length === 0) return null;
+
+      const maxWeight = Math.max(0, ...completedSets.map((set) => set.weight || 0));
+      const maxReps = Math.max(0, ...completedSets.map((set) => set.reps || 0));
+      const totalVolume = completedSets.reduce(
+        (sum, set) => sum + (set.weight || 0) * (set.reps || 0),
+        0
+      );
+      const estimated1RM = completedSets.reduce(
+        (max, set) => Math.max(max, calculateEstimated1RM(set.weight || 0, set.reps || 0)),
+        0
+      );
+
+      return {
+        sessionId: s._id,
+        date: s.date,
+        workoutName: s.workoutName || "Workout",
+        sets: completedSets.map((set) => ({
+          setNumber: set.setNumber,
+          weight: set.weight || 0,
+          reps: set.reps || 0,
+          rpe: set.rpe || null,
+          isPR: Boolean(set.isPR),
+        })),
+        totalVolumeKg: Math.round(totalVolume),
+        maxWeight,
+        maxReps,
+        estimated1RM,
+      };
+    })
+    .filter(Boolean);
+
+  const canonicalName = exerciseDoc?.name || decodeURIComponent(identifier).trim();
+  const pr = await PersonalRecord.findOne({
+    userId: req.user._id,
+    $or: [
+      ...(exerciseDoc?._id ? [{ exerciseId: exerciseDoc._id }] : []),
+      { exerciseName: new RegExp(`^${canonicalName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+    ],
+  }).lean();
+
+  return sendSuccess(res, {
+    exerciseName: canonicalName,
+    exercise: exerciseDoc
+      ? {
+          _id: exerciseDoc._id,
+          name: exerciseDoc.name,
+          primaryMuscle: exerciseDoc.primaryMuscle,
+          videoUrl: exerciseDoc.videoUrl,
+          gifUrl: exerciseDoc.gifUrl,
+        }
+      : null,
+    history,
+    totalSessions: history.length,
+    personalRecord: pr
+      ? {
+          bestWeight: pr.bestWeight,
+          bestReps: pr.bestReps,
+          estimatedOneRepMax: pr.estimatedOneRepMax,
+          achievedAt: pr.achievedAt,
+        }
+      : null,
+  });
+});
+
 // ==========================================
 // 2. WORKOUT PLAN MANAGEMENT
 // ==========================================
@@ -864,17 +1143,76 @@ const startWorkoutSession = asyncHandler(async (req, res) => {
     });
   }
 
-  // 3. Hydrate previous best weights/reps for each exercise from PersonalRecords
+  // 3. Hydrate previous performance and records for each exercise from most recent completed session
   if (initialExercises.length > 0) {
     for (const ex of initialExercises) {
       const exName = (ex.name || "").trim();
       if (!exName) continue;
+
+      const { exerciseDoc, queryNames, matchConditions } = await resolveExerciseAndAliases(ex.exerciseId || exName);
+
+      // Find the latest completed session containing this exercise
+      let latestSession = null;
+      if (matchConditions.length > 0) {
+        latestSession = await WorkoutSession.findOne({
+          userId: req.user._id,
+          status: "completed",
+          $or: matchConditions,
+        })
+          .sort({ date: -1, endTime: -1, createdAt: -1 })
+          .lean();
+      }
+
+      // Query PR
+      const canonicalName = exerciseDoc?.name || exName;
       const pr = await PersonalRecord.findOne({
         userId: req.user._id,
-        exerciseName: exName,
+        $or: [
+          ...(exerciseDoc?._id ? [{ exerciseId: exerciseDoc._id }] : []),
+          { exerciseName: new RegExp(`^${canonicalName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+        ],
       }).lean();
 
-      if (pr) {
+      if (latestSession) {
+        const foundPrevEx = (latestSession.exercises || []).find((e) => {
+          if (exerciseDoc?._id && e.exerciseId && e.exerciseId.toString() === exerciseDoc._id.toString()) return true;
+          const eName = (e.name || "").toLowerCase().trim();
+          return queryNames.some((qn) => qn.toLowerCase().trim() === eName);
+        });
+
+        const completedSets = (foundPrevEx?.sets || []).filter((s) => s.completed !== false);
+
+        if (completedSets.length > 0) {
+          ex.previousPerformance = {
+            lastDate: latestSession.date,
+            workoutName: latestSession.workoutName || "Workout",
+            sessionId: latestSession._id,
+            sets: completedSets.map((s) => ({
+              setNumber: s.setNumber,
+              weight: s.weight || 0,
+              reps: s.reps || 0,
+            })),
+            bestWeight: Math.max(0, ...completedSets.map((s) => s.weight || 0)),
+            bestReps: Math.max(0, ...completedSets.map((s) => s.reps || 0)),
+            totalVolumeKg: Math.round(completedSets.reduce((sum, s) => sum + (s.weight || 0) * (s.reps || 0), 0)),
+          };
+
+          ex.sets.forEach((set, idx) => {
+            if (completedSets[idx]) {
+              set.previousWeight = completedSets[idx].weight || 0;
+              set.previousReps = completedSets[idx].reps || 0;
+            } else if (pr) {
+              set.previousWeight = pr.bestWeight || 0;
+              set.previousReps = pr.bestReps || 0;
+            }
+          });
+        } else if (pr) {
+          ex.sets.forEach((set) => {
+            set.previousWeight = pr.bestWeight || 0;
+            set.previousReps = pr.bestReps || 0;
+          });
+        }
+      } else if (pr) {
         ex.sets.forEach((set) => {
           set.previousWeight = pr.bestWeight || 0;
           set.previousReps = pr.bestReps || 0;
@@ -1274,6 +1612,39 @@ const getWorkoutHistory = asyncHandler(async (req, res) => {
   });
 });
 
+// @desc Get user's completed workout sessions for smart plan creation
+// @route GET /api/workouts/sessions/completed-list
+const getCompletedWorkoutSessions = asyncHandler(async (req, res) => {
+  const sessions = await WorkoutSession.find({
+    userId: req.user._id,
+    status: "completed",
+  })
+    .sort({ date: -1, createdAt: -1 })
+    .limit(50)
+    .lean();
+
+  const list = sessions.map((s) => ({
+    _id: s._id,
+    workoutName: s.workoutName || "Workout",
+    date: s.date,
+    durationMinutes: s.durationMinutes || 0,
+    totalVolumeKg: s.totalVolumeKg || 0,
+    totalReps: s.totalReps || 0,
+    targetMuscles: s.targetMuscles || [],
+    exerciseCount: (s.exercises || []).length,
+    exercises: (s.exercises || []).map((e) => ({
+      exerciseId: e.exerciseId || null,
+      name: e.name,
+      primaryMuscle: e.primaryMuscle || "",
+      setsCount: (e.sets || []).length,
+      bestWeight: Math.max(0, ...(e.sets || []).map((set) => set.weight || 0)),
+      sampleReps: (e.sets || [])[0]?.reps || 10,
+    })),
+  }));
+
+  return sendSuccess(res, { sessions: list, count: list.length });
+});
+
 // @desc Get single workout session detail
 // @route GET /api/workouts/sessions/:id
 const getWorkoutSessionById = asyncHandler(async (req, res) => {
@@ -1599,6 +1970,8 @@ module.exports = {
   getExerciseFilters,
   toggleFavoriteExercise,
   createCustomExercise,
+  getExercisePreviousPerformance,
+  getExerciseHistory,
   // Templates & Plans
   getTemplates,
   applyTemplate,
@@ -1620,6 +1993,7 @@ module.exports = {
   shareWorkoutToFeed,
   // History & Analytics
   getWorkoutHistory,
+  getCompletedWorkoutSessions,
   getWorkoutSessionById,
   getWorkoutAnalytics,
   getMuscleMapData,

@@ -11,6 +11,8 @@ router.use(protect);
 router.get("/exercises", workoutController.getExercises);
 router.get("/exercises/filters", workoutController.getExerciseFilters);
 router.post("/exercises/custom", workoutController.createCustomExercise);
+router.get("/exercises/:identifier/previous-performance", workoutController.getExercisePreviousPerformance);
+router.get("/exercises/:identifier/history", workoutController.getExerciseHistory);
 router.get("/exercises/:idOrSlug", workoutController.getExerciseById);
 router.post("/exercises/:id/favorite", workoutController.toggleFavoriteExercise);
 
@@ -25,6 +27,7 @@ router.get("/today", workoutController.getTodayWorkout);
 // ==========================================
 // Live Sessions & History
 // ==========================================
+router.get("/sessions/completed-list", workoutController.getCompletedWorkoutSessions);
 router.get("/sessions/active", workoutController.getActiveSession);
 router.post("/sessions/start", workoutController.startWorkoutSession);
 router.get("/sessions/history", workoutController.getWorkoutHistory);
